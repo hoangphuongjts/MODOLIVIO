@@ -1,0 +1,21 @@
+{
+  "author": "MODOLIVIO",
+  "description": "MODOLIVIO — App Video Bán Hàng (bản Windows)",
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  },
+  "license": "UNLICENSED",
+  "main": "main.js",
+  "name": "modolivio",
+  "private": true,
+  "productName": "MODOLIVIO",
+  "scripts": {
+    "check": "node --check main.js && node --check preload.js && node --check server.js && node --check bridge.js && node --check handlers.js",
+    "dist:win": "electron-builder --win --x64 --publish=never",
+    "pack:win": "electron-builder --win --x64 --dir --publish=never",
+    "start": "electron .",
+    "start:smoke": "electron . --smoke-test"
+  },
+  "version": "1.2.0"
+}

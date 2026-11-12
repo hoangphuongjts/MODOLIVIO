@@ -1,0 +1,6 @@
+node_modules/
+dist-win/
+win-unpacked/
+*.exe
+*.zip
+*.asar
