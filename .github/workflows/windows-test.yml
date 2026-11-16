@@ -1,8 +1,12 @@
 name: MODOLIVIO Windows VM smoke and package
 
-# Manual only: never spend runner resources on pushes or untrusted PRs.
+# Feature-branch-only push trigger for this Windows CI smoke test; no PR or main trigger.
+# workflow_dispatch remains available when the workflow is registered on the default branch.
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - feature/p3-windows-bridge-agent
 
 permissions:
   contents: read
