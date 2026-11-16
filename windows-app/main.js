@@ -7,7 +7,7 @@ const fs = require("fs");
 const { execFile } = require("child_process");
 const { createServer } = require("./server.js");
 const { createBridgeAgent } = require("./p3/bridge-agent.js");
-const { resolveRenderProvider } = require("./p3/provider-selector.js");
+const { createRenderRouter } = require("./p3/provider-selector.js");
 const { createFaceLockGate } = require("./p3/face-lock-gate.js");
 const { MuseSessionVault } = require("./p3/session-vault.js");
 const { SessionHealthMonitor, AutoReloginEngine } = require("./p3/session-health.js");
@@ -25,6 +25,7 @@ let bridgeAgent = null;
 let tray = null;
 let quitting = false;
 let museVault = null;
+let museCookieStore = null;
 const museWindows = new Map();
 const museHealth = new Map();
 const museSessionListeners = new WeakSet();
@@ -49,9 +50,18 @@ async function startLocalServer() {
 }
 
 async function startBridgeAgent() {
+  const bridgeDir = path.join(dataDir, "bridge");
+  const museEnabled = process.env.MODOLIVIO_MUSE_ENGINE === "1";
+  const provider = createRenderRouter({
+    enableMuse: museEnabled,
+    defaultProvider: process.env.MODOLIVIO_RENDER_PROVIDER || "seedance",
+    dataDir: bridgeDir,
+    cookieVault: museCookieStore?.vault || null,
+    allowedProfileId: process.env.MODOLIVIO_MUSE_ALLOWED_PROFILE_ID || "",
+  });
   bridgeAgent = await createBridgeAgent({
-    dataDir: path.join(dataDir, "bridge"),
-    provider: resolveRenderProvider(process.env.MODOLIVIO_RENDER_PROVIDER || "seedance"),
+    dataDir: bridgeDir,
+    provider,
     allowedOrigins: [`http://127.0.0.1:${localPort}`, `http://localhost:${localPort}`],
     faceLockGate: createFaceLockGate(),
     diskFreeBytes: async (dir) => {
@@ -61,6 +71,7 @@ async function startBridgeAgent() {
     },
     emit: (event) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("modolivio:bridge-event", event); },
   });
+  if (typeof provider.setBridgePort === "function") provider.setBridgePort(bridgeAgent.port);
   const image = nativeImage.createFromDataURL("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/pyoAAAAASUVORK5CYII=");
   tray = new Tray(image);
   tray.setToolTip(`MODOLIVIO Bridge Agent · 127.0.0.1:${bridgeAgent.port}`);
@@ -350,6 +361,22 @@ app.whenReady().then(async () => {
   } catch (error) {
     museVault = null;
     console.warn("MuseSessionVault locked:", error.message);
+  }
+  if (process.env.MODOLIVIO_MUSE_ENGINE === "1" && !process.env.MODOLIVIO_MUSE_ALLOWED_PROFILE_ID) {
+    console.warn("Muse engine blocked until MODOLIVIO_MUSE_ALLOWED_PROFILE_ID is configured for HY SINH");
+    process.env.MODOLIVIO_MUSE_ENGINE = "0";
+  }
+  if (process.env.MODOLIVIO_MUSE_ENGINE === "1") {
+    try {
+      // The uploaded Gemini autoReloginEngine remains present but is NOT started:
+      // only visible manual sign-in is permitted; never auto-fill credentials.
+      const { createMuseCookieStore } = require("./p3/muse/museCookieStore.js");
+      museCookieStore = createMuseCookieStore({ directory: path.join(dataDirFor(), "muse-secure"), safeStorage });
+    } catch (error) {
+      console.warn("Muse cookie vault blocked:", error.message);
+      // Keep the UI available, but do not start Muse without a protected vault.
+      process.env.MODOLIVIO_MUSE_ENGINE = "0";
+    }
   }
   await startLocalServer();
   await startBridgeAgent();

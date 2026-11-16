@@ -25,8 +25,17 @@ except ImportError as exc:
 
 class CollectedTestCount:
     count = 0
+    skipped = 0
+    failed = 0
+    passed = 0
     def pytest_collection_finish(self, session):
         self.count = len(session.items)
+    def pytest_runtest_logreport(self, report):
+        if report.when == "call":
+            if report.passed: self.passed += 1
+            if report.failed: self.failed += 1
+        if report.skipped:
+            self.skipped += 1
 
 counter = CollectedTestCount()
 paths = [str(source_dir)]
@@ -38,4 +47,8 @@ if counter.count < 6:
     raise SystemExit(f"BLOCKED: at least 6 Face Lock test cases required; collected {counter.count}")
 if exit_code != 0:
     raise SystemExit(exit_code)
-print(f"PASS: actual verifier present, {len(models)} ONNX model(s) present, {counter.count} Python tests passed")
+if counter.skipped:
+    raise SystemExit(f"BLOCKED: {counter.skipped} Python Face Lock test(s) skipped (need real reference images); {counter.passed} passed")
+if counter.passed < 6:
+    raise SystemExit(f"BLOCKED: expected >=6 passing real Face Lock tests; only {counter.passed} passed")
+print(f"PASS: actual verifier, {len(models)} ONNX model(s), {counter.passed} Python tests passed without skipping")

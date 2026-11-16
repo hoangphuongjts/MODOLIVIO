@@ -70,24 +70,41 @@ class RenderPipeline {
           let taskId = job.provider_task_id;
           if (!taskId) {
             // Re-check files immediately before provider submission; they may have changed while queued.
-            if (this.faceLockGate) await this.faceLockGate.verifyScene(scene, index);
-            const submitted = await this.provider.submit({ prompt: scene.prompt, imageUrl: scene.sourceImageUrl, durationSec: 10, aspectRatio: "9:16" });
+            const faceLockResult = this.faceLockGate ? await this.faceLockGate.verifyScene(scene, index) : null;
+            const submitted = await this.provider.submit({
+              provider: scene.provider || payload.provider || "seedance",
+              prompt: scene.prompt, imageUrl: scene.sourceImageUrl,
+              durationSec: 10, aspectRatio: "9:16",
+              profileId: payload.profileId, jobId: job.id, sceneIndex: index,
+              idempotencyKey: job.idempotency_key || job.id,
+              characterRefImagePath: scene.characterReferenceImagePath || scene.characterRefImagePath,
+              originalProductImagePath: scene.originalProductImagePath,
+              faceLockSimilarity: faceLockResult?.similarity_pct / 100,
+              dialogue: scene.dialogue, voiceText: scene.dialogue,
+            });
             taskId = submitted.taskId;
             this.queue.setProviderTask(job.id, taskId);
           }
           const deadline = Date.now() + 15 * 60_000;
-          let videoUrl;
+          let videoUrl; let localFile;
           while (Date.now() < deadline && !this.stopping) {
             this.assertProfileAllowed(payload.profileId);
             const status = await this.provider.getTask(taskId);
             const state = status.status || status.task_status;
-            if (state === "failed") throw new Error(`Seedance task lỗi: ${status.error?.message || status.error || "không rõ lỗi"}`);
-            if (state === "succeeded") { videoUrl = findVideoUrl(status); break; }
+            if (state === "failed") throw new Error(`Render task lỗi: ${status.error?.message || status.error || "không rõ lỗi"}`);
+            if (state === "succeeded") { videoUrl = findVideoUrl(status); localFile = status.localFile; break; }
             await new Promise((resolve) => setTimeout(resolve, 5000));
           }
           if (this.stopping) return;
-          if (!videoUrl) throw new Error("Seedance chưa hoàn tất trong 15 phút hoặc không trả video_url");
-          const sceneFile = await this.downloadVideo(videoUrl, job.id, index);
+          if (!videoUrl && !localFile) throw new Error("Render chưa hoàn tất trong 15 phút hoặc không trả video_URL/localFile");
+          let sceneFile;
+          if (localFile) {
+            if (typeof localFile !== "string" || !path.isAbsolute(localFile) || !fs.existsSync(localFile)) throw new Error("Muse localFile không tồn tại");
+            sceneFile = path.join(this.cacheDir, `${job.id}-${index}-muse.mp4`);
+            if (path.resolve(localFile) !== path.resolve(sceneFile)) fs.copyFileSync(localFile, sceneFile);
+          } else {
+            sceneFile = await this.downloadVideo(videoUrl, job.id, index);
+          }
           const narration = await this.tts.synthesize({ text: scene.dialogue || "", voice: scene.voice });
           const audioFile = path.join(this.cacheDir, `${job.id}-${index}.wav`);
           fs.writeFileSync(audioFile, narration);

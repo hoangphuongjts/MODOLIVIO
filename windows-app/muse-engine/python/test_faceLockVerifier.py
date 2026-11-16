@@ -1,0 +1,60 @@
+"""Test cho Face Lock verifier (YuNet + SFace). Chạy: <venv>/bin/python -m pytest test_faceLockVerifier.py -v
+Yêu cầu model trong models/ (đã tải sẵn). Test e2e cần ảnh mặt thật — dùng ảnh
+canh-1-chot-nhan-vat-2/3.webp trong media library nếu có, bỏ qua nếu thiếu.
+"""
+import os
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from faceLockVerifier import FaceLockVerifier, _to_pct
+
+MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+
+
+def test_to_pct_mapping():
+    assert _to_pct(1.0) == 100.0
+    assert _to_pct(0.6) == 95.0  # ngưỡng 95% <-> cosine 0.6
+    assert _to_pct(0.0) == 50.0
+    assert _to_pct(-1.0) == 0.0
+
+
+def test_models_exist():
+    assert os.path.exists(os.path.join(MODELS_DIR, "face_detection_yunet_2023mar.onnx"))
+    assert os.path.exists(os.path.join(MODELS_DIR, "face_recognition_sface_2021dec.onnx"))
+
+
+def test_verifier_loads():
+    v = FaceLockVerifier()
+    assert v.detector is not None and v.recognizer is not None
+
+
+def test_missing_file_returns_error():
+    v = FaceLockVerifier()
+    r = v.verify("/khong/co/file.jpg", "/khong/co/file2.jpg")
+    assert r["passed"] is False
+    assert r["error"] is not None
+
+
+# --- e2e với ảnh nhân vật thật (bỏ qua nếu không có ảnh) ---
+IMG2 = "/home/hatch/workspace/user/media_library/image/canh-1-chot-nhan-vat-2.webp"
+IMG3 = "/home/hatch/workspace/user/media_library/image/canh-1-chot-nhan-vat-3.webp"
+
+
+@pytest.mark.skipif(not (os.path.exists(IMG2) and os.path.exists(IMG3)),
+                    reason="thiếu ảnh nhân vật mẫu")
+def test_same_face_passes():
+    v = FaceLockVerifier()
+    r = v.verify(IMG2, IMG2)
+    assert r["passed"] is True
+    assert r["similarity_pct"] == 100.0
+
+
+@pytest.mark.skipif(not (os.path.exists(IMG2) and os.path.exists(IMG3)),
+                    reason="thiếu ảnh nhân vật mẫu")
+def test_different_face_fails():
+    v = FaceLockVerifier()
+    r = v.verify(IMG2, IMG3)
+    assert r["passed"] is False
+    assert r["similarity_pct"] < 95.0

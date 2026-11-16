@@ -24,6 +24,7 @@ jobs:
       ELECTRON_BUILDER_ALLOW_UNRESOLVED_DEPENDENCIES: 'false'
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       MODOLIVIO_MUSE_LIVE: '0'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
       MODOLIVIO_MUSE_ENGINE: '0'
       MODOLIVIO_VIENEU_URL: 'http://127.0.0.1:8123'
 
@@ -66,11 +67,11 @@ jobs:
           "CHROME_BIN=$chrome" >> $env:GITHUB_ENV
           & $chrome --version
 
-      - name: Install NPM dependencies from lockfile (Node 20)
+      - name: Install NPM dependencies (Node 20; regenerates local lockfile in CI)
         id: deps
         shell: pwsh
         continue-on-error: true
-        run: npm ci --no-audit --no-fund
+        run: npm install --no-audit --no-fund
 
       # The existing Bridge Agent imports node:sqlite (not available in Node 20).
       # Keep Node 20 installed as requested, but test with Node 24 (Electron 45 compatible).
@@ -112,6 +113,12 @@ jobs:
             python -m pip install 'opencv-contrib-python-headless>=4.10,<5' 'numpy>=1.26,<3' 'pytest>=8,<10'
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Fetch open-source OpenCV Zoo models for temporary Windows CI
+        id: facemodels
+        continue-on-error: true
+        shell: pwsh
+        run: python ci/download-face-models.py
 
       - name: Verify real YuNet/SFace model files and run Python tests
         id: facelock
@@ -177,6 +184,7 @@ jobs:
           RESULT_TYPECHECK: ${{ steps.typecheck.outcome }}
           RESULT_PYDEPS: ${{ steps.pydeps.outcome }}
           RESULT_FACELOCK: ${{ steps.facelock.outcome }}
+          RESULT_MODELS: ${{ steps.facemodels.outcome }}
           RESULT_BRIDGE: ${{ steps.bridge.outcome }}
           RESULT_CDP: ${{ steps.cdp.outcome }}
           RESULT_BUILD: ${{ steps.build.outcome }}
@@ -190,6 +198,7 @@ jobs:
             JavaScript_tests = $env:RESULT_UNIT
             Typecheck = $env:RESULT_TYPECHECK
             Python_deps = $env:RESULT_PYDEPS
+            Face_Lock_models = $env:RESULT_MODELS
             Face_Lock_real = $env:RESULT_FACELOCK
             Bridge_HTTP = $env:RESULT_BRIDGE
             Chrome_CDP = $env:RESULT_CDP

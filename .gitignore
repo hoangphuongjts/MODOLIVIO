@@ -8,3 +8,7 @@ __pycache__/
 *.pem
 *.p12
 *.key
+
+# Local face models are downloaded only from the verified OpenCV Zoo source.
+windows-app/muse-engine/python/models/*.onnx
+windows-app/muse-engine/python/models/*.onnx.*
