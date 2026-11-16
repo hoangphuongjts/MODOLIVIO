@@ -1,13 +1,19 @@
 // main.js — Tiến trình chính của MODOLIVIO Windows (Electron).
 "use strict";
 
-const { app, BrowserWindow, Menu, shell, dialog, ipcMain } = require("electron");
+const { app, BrowserWindow, Menu, shell, dialog, ipcMain, Tray, nativeImage, session, safeStorage } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { execFile } = require("child_process");
 const { createServer } = require("./server.js");
+const { createBridgeAgent } = require("./p3/bridge-agent.js");
+const { resolveRenderProvider } = require("./p3/provider-selector.js");
+const { createFaceLockGate } = require("./p3/face-lock-gate.js");
+const { MuseSessionVault } = require("./p3/session-vault.js");
+const { SessionHealthMonitor, AutoReloginEngine } = require("./p3/session-health.js");
 
-const APP_VERSION = "1.2.0-win1";
+const APP_VERSION = "1.3.0-win1";
+const VIENEU_URL = process.env.MODOLIVIO_VIENEU_URL || "http://127.0.0.1:8123";
 const SMOKE_TEST = process.argv.includes("--smoke-test");
 
 let mainWindow = null;
@@ -15,6 +21,14 @@ let localServer = null;
 let localPort = 0;
 let dataDir = "";
 let localStore = null;
+let bridgeAgent = null;
+let tray = null;
+let quitting = false;
+let museVault = null;
+const museWindows = new Map();
+const museHealth = new Map();
+const museSessionListeners = new WeakSet();
+let userAssistedRelogin = null;
 
 function dataDirFor() {
   return path.join(app.getPath("userData"), "MODOLIVIO");
@@ -34,6 +48,88 @@ async function startLocalServer() {
   });
 }
 
+async function startBridgeAgent() {
+  bridgeAgent = await createBridgeAgent({
+    dataDir: path.join(dataDir, "bridge"),
+    provider: resolveRenderProvider(process.env.MODOLIVIO_RENDER_PROVIDER || "seedance"),
+    allowedOrigins: [`http://127.0.0.1:${localPort}`, `http://localhost:${localPort}`],
+    faceLockGate: createFaceLockGate(),
+    diskFreeBytes: async (dir) => {
+      const { statfs } = require("fs/promises");
+      const stat = await statfs(dir);
+      return Number(stat.bavail) * Number(stat.bsize);
+    },
+    emit: (event) => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("modolivio:bridge-event", event); },
+  });
+  const image = nativeImage.createFromDataURL("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/pyoAAAAASUVORK5CYII=");
+  tray = new Tray(image);
+  tray.setToolTip(`MODOLIVIO Bridge Agent · 127.0.0.1:${bridgeAgent.port}`);
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: `Bridge Agent hoạt động · cổng ${bridgeAgent.port}`, enabled: false },
+    { label: "Xem mã ghép nối extension", click: () => dialog.showMessageBox({ type: "info", title: "Ghép nối MODOLIVIO Shop Grab", message: `Bridge: 127.0.0.1:${bridgeAgent.port}`, detail: `Mã ghép nối một lần: ${bridgeAgent.pairingCode}\n\nCấu hình MODOLIVIO_BRIDGE_ALLOWED_ORIGINS với đúng extension origin trước khi ghép nối.` }) },
+    { label: "Mở MODOLIVIO", click: () => { if (!mainWindow) createWindow(); else mainWindow.show(); } },
+    { label: "Thoát Bridge Agent", click: () => { quitting = true; app.quit(); } },
+  ]));
+  tray.on("click", () => { if (!mainWindow) createWindow(); else mainWindow.show(); });
+}
+
+function configuredMuseUrl() {
+  const raw = process.env.MODOLIVIO_MUSE_LOGIN_URL;
+  if (!raw) throw new Error("Muse sign-in URL chưa được cấu hình; không tự đoán endpoint đăng nhập.");
+  const url = new URL(raw);
+  const allowed = new Set((process.env.MODOLIVIO_MUSE_ALLOWED_ORIGINS || "").split(",").map((part) => part.trim()).filter(Boolean));
+  if (url.protocol !== "https:" || !allowed.has(url.origin)) throw new Error("Muse sign-in phải là HTTPS và khớp chính xác MODOLIVIO_MUSE_ALLOWED_ORIGINS.");
+  return url;
+}
+
+async function openMuseSignIn(profileId) {
+  if (!/^[a-zA-Z0-9_-]{1,80}$/.test(profileId || "")) throw new Error("profileId không hợp lệ");
+  if (!museVault) throw new Error("Muse session vault bị khóa: DPAPI/safeStorage không sẵn sàng.");
+  const target = configuredMuseUrl();
+  const existing = museWindows.get(profileId);
+  if (existing && !existing.isDestroyed()) { existing.show(); existing.focus(); return true; }
+  const partition = museVault.partition(profileId);
+  const profileSession = session.fromPartition(partition);
+  let health;
+  health = new SessionHealthMonitor({ profileId, onHeartbeat: async () => {
+    const activeWindow = museWindows.get(profileId);
+    if (!activeWindow || activeWindow.isDestroyed()) return;
+    try {
+      const bodyText = await activeWindow.webContents.executeJavaScript("document.body?.innerText?.slice(0, 4096) || ''", true);
+      health.observeResponse({ url: activeWindow.webContents.getURL(), bodyText });
+    } catch { /* page transition; the next 15-minute check will retry */ }
+  }, onInvalid: (signal) => {
+    bridgeAgent?.safety.observe(profileId, signal.reason, { status: signal.status, url: signal.url });
+    void userAssistedRelogin.sessionInvalid(profileId, signal.status || signal.url);
+  } });
+  if (!museSessionListeners.has(profileSession)) {
+    const origins = (process.env.MODOLIVIO_MUSE_ALLOWED_ORIGINS || "").split(",").map((part) => part.trim()).filter(Boolean);
+    profileSession.webRequest.onCompleted({ urls: origins.map((origin) => `${origin}/*`) }, (details) => {
+      const monitor = museHealth.get(profileId);
+      if (monitor && (details.statusCode === 401 || details.statusCode === 403)) monitor.observeResponse({ status: details.statusCode, url: details.url });
+    });
+    museSessionListeners.add(profileSession);
+  }
+  const window = new BrowserWindow({ width: 1180, height: 820, title: `Muse · ${profileId}`,
+    webPreferences: { partition, contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  museWindows.set(profileId, window); museHealth.set(profileId, health); health.start();
+  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.on("will-navigate", (event, nextUrl) => {
+    let nextOrigin = ""; try { nextOrigin = new URL(nextUrl).origin; } catch { /* reject malformed URL */ }
+    if (!new Set((process.env.MODOLIVIO_MUSE_ALLOWED_ORIGINS || "").split(",").map((part) => part.trim()).filter(Boolean)).has(nextOrigin)) event.preventDefault();
+  });
+  window.webContents.on("did-navigate", (_event, url) => health.observeResponse({ url }));
+  window.webContents.on("did-finish-load", async () => {
+    try {
+      const bodyText = await window.webContents.executeJavaScript("document.body?.innerText?.slice(0, 4096) || ''", true);
+      health.observeResponse({ url: window.webContents.getURL(), bodyText });
+    } catch { /* destroyed/navigating renderer; next navigation is monitored */ }
+  });
+  window.on("closed", () => { health.stop(); museWindows.delete(profileId); museHealth.delete(profileId); });
+  await window.loadURL(target.href);
+  return true;
+}
+
 function buildMenu() {
   const template = [
     {
@@ -41,6 +137,12 @@ function buildMenu() {
       submenu: [
         { label: "Mở thư mục dữ liệu", click: () => shell.openPath(dataDir) },
         { label: "Mở thư mục tải lên", click: () => shell.openPath(path.join(dataDir, "uploads")) },
+        { label: "Mở thư mục video đã xuất", click: () => shell.openPath(path.join(dataDir, "bridge", "exports")) },
+        { label: "Mở Muse đăng nhập thủ công…", click: async () => {
+          const answer = await dialog.showMessageBox(mainWindow, { type: "question", title: "Muse profile", message: "Mở phiên Muse trong profile tách biệt?", detail: "Chỉ mở trang đăng nhập hiển thị để bạn tự thao tác. MODOLIVIO không đọc cookie, tự điền mật khẩu hay giải CAPTCHA.", buttons: ["Mở", "Hủy"], defaultId: 0, cancelId: 1 });
+          if (answer.response !== 0) return;
+          try { await openMuseSignIn("default"); } catch (error) { dialog.showErrorBox("Không mở được Muse", error.message); }
+        } },
         { type: "separator" },
         { label: "Thoát", role: "quit" },
       ],
@@ -202,8 +304,20 @@ ipcMain.handle("modolivio:get-info", () => ({
   platform: process.platform,
   dataDir,
   localPort,
-  vieneuUrl: "http://127.0.0.1:8000",
+  vieneuUrl: VIENEU_URL,
+  bridgePort: bridgeAgent?.port || null,
+  bridgePairingCode: bridgeAgent?.pairingCode || null,
 }));
+
+ipcMain.handle("modolivio:bridge-status", () => ({
+  port: bridgeAgent?.port || null,
+  pairingCode: bridgeAgent?.pairingCode || null,
+  state: bridgeAgent ? "running" : "stopped",
+}));
+
+ipcMain.handle("modolivio:muse-open-sign-in", async (_event, profileId) => openMuseSignIn(String(profileId || "")));
+ipcMain.handle("modolivio:muse-confirm-sign-in", (_event, profileId) => { userAssistedRelogin?.markUserConfirmed(String(profileId || "")); return true; });
+ipcMain.handle("modolivio:muse-session-vault-status", () => ({ ready: Boolean(museVault), backend: museVault ? safeStorage.getSelectedStorageBackend?.() || "unknown" : "unavailable" }));
 
 ipcMain.handle("modolivio:open-data-folder", async () => {
   await shell.openPath(dataDir);
@@ -219,17 +333,26 @@ ipcMain.handle("modolivio:check-tools", async () => {
     });
   });
   try {
-    const res = await fetch("http://127.0.0.1:8000/v1/voices", { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(new URL("/v1/voices", VIENEU_URL), { signal: AbortSignal.timeout(5000) });
     out.vieneuRunning = res.ok;
     if (!res.ok) out.vieneuError = `Máy chủ VieNeu-TTS trả mã ${res.status}`;
   } catch {
-    out.vieneuError = "Máy chủ VieNeu-TTS chưa chạy ở http://127.0.0.1:8000";
+    out.vieneuError = `Máy chủ VieNeu-TTS chưa chạy ở ${VIENEU_URL}`;
   }
   return out;
 });
 
 app.whenReady().then(async () => {
+  try {
+    museVault = new MuseSessionVault({ directory: path.join(app.getPath("userData"), "MODOLIVIO", "secure"), safeStorage });
+    museVault.initialize();
+    userAssistedRelogin = new AutoReloginEngine({ openUserSignIn: openMuseSignIn, maxAttempts: 2 });
+  } catch (error) {
+    museVault = null;
+    console.warn("MuseSessionVault locked:", error.message);
+  }
   await startLocalServer();
+  await startBridgeAgent();
   buildMenu();
   createWindow();
   app.on("activate", () => {
@@ -238,6 +361,18 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
-  if (localServer) localServer.close();
-  if (process.platform !== "darwin") app.quit();
+  if (quitting) return;
+  // The Bridge Agent is designed to run in the tray after the window closes.
+  if (process.platform === "darwin" && !tray) app.quit();
+});
+
+app.on("before-quit", async (event) => {
+  if (!bridgeAgent) { if (localServer) localServer.close(); return; }
+  if (app.__p3Closing) return;
+  event.preventDefault(); app.__p3Closing = true;
+  try { await bridgeAgent.close(); } finally {
+    bridgeAgent = null;
+    if (localServer) await new Promise((resolve) => localServer.close(resolve));
+    app.exit(0);
+  }
 });

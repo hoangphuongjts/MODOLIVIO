@@ -1,6 +1,10 @@
 node_modules/
-dist-win/
-win-unpacked/
-*.exe
-*.zip
-*.asar
+dist/
+*.log
+__pycache__/
+*.py[cod]
+.env
+.env.*
+*.pem
+*.p12
+*.key

@@ -1,0 +1,210 @@
+name: MODOLIVIO Windows VM smoke and package
+
+# Manual only: never spend runner resources on pushes or untrusted PRs.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: modolivio-win-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-test:
+    name: Windows tests (no Muse login)
+    runs-on: windows-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        working-directory: windows-app
+    env:
+      CI: 'true'
+      ELECTRON_BUILDER_ALLOW_UNRESOLVED_DEPENDENCIES: 'false'
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      MODOLIVIO_MUSE_LIVE: '0'
+      MODOLIVIO_MUSE_ENGINE: '0'
+      MODOLIVIO_VIENEU_URL: 'http://127.0.0.1:8123'
+
+    steps:
+      - name: Checkout exact commit
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Install Node 20 (requested baseline)
+        id: node20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: windows-app/package-lock.json
+
+      - name: Install Python 3.12
+        id: python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify Windows Chrome installation
+        id: chrome
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $paths = @(
+            "${env:ProgramFiles}\Google\Chrome\Application\chrome.exe",
+            "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+            "${env:LOCALAPPDATA}\Google\Chrome\Application\chrome.exe"
+          )
+          $chrome = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $chrome) {
+            choco install googlechrome --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to install Google Chrome' }
+            $chrome = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $chrome) { throw 'Chrome missing after installation' }
+          "CHROME_BIN=$chrome" >> $env:GITHUB_ENV
+          & $chrome --version
+
+      - name: Install NPM dependencies from lockfile (Node 20)
+        id: deps
+        shell: pwsh
+        continue-on-error: true
+        run: npm ci --no-audit --no-fund
+
+      # The existing Bridge Agent imports node:sqlite (not available in Node 20).
+      # Keep Node 20 installed as requested, but test with Node 24 (Electron 45 compatible).
+      - name: Activate Node 24 for node:sqlite tests and build
+        id: node24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Verify JS syntax and project entrypoints
+        id: syntax
+        continue-on-error: true
+        shell: pwsh
+        run: npm run check
+
+      - name: Run ALL JavaScript tests
+        id: unit
+        continue-on-error: true
+        shell: pwsh
+        run: npm test
+
+      - name: Typecheck Bridge Agent
+        id: typecheck
+        continue-on-error: true
+        shell: pwsh
+        run: npm run typecheck
+
+      - name: Install local Face Lock dependencies
+        id: pydeps
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $requirements = 'muse-engine/python/requirements.txt'
+          if (Test-Path $requirements) {
+            python -m pip install -r $requirements
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            python -m pip install 'pytest>=8,<10'
+          } else {
+            python -m pip install 'opencv-contrib-python-headless>=4.10,<5' 'numpy>=1.26,<3' 'pytest>=8,<10'
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify real YuNet/SFace model files and run Python tests
+        id: facelock
+        continue-on-error: true
+        shell: pwsh
+        run: python ci/verify-face-lock.py
+
+      - name: Smoke Bridge Agent HTTP on 127.0.0.1:19740-19749
+        id: bridge
+        continue-on-error: true
+        shell: pwsh
+        run: node ci/smoke-bridge.js
+
+      - name: Smoke isolated Chrome CDP 127.0.0.1:19750-19759
+        id: cdp
+        if: steps.chrome.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: ./ci/smoke-cdp.ps1
+
+      - name: Build Windows EXE with electron-builder (unverified QA binary)
+        id: build
+        continue-on-error: true
+        shell: pwsh
+        run: npm run dist:win
+
+      - name: Inspect build output, calculate SHA-256
+        id: inspect
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path dist -Recurse -Filter '*.exe' -File -ErrorAction SilentlyContinue
+          if (-not $exe) { throw 'electron-builder produced no EXE file' }
+          $lines = @()
+          foreach ($item in $exe) {
+            $sha = (Get-FileHash $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            $lines += "$sha  $($item.FullName.Substring((Get-Location).Path.Length+1))"
+            Write-Host "EXE: $($item.Name) bytes=$($item.Length) sha256=$sha"
+          }
+          $lines | Set-Content 'dist/SHA256SUMS.txt' -Encoding utf8
+
+      - name: Upload build artifact (QA only, NOT a release)
+        id: artifact
+        if: steps.build.outcome == 'success' && steps.inspect.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MODOLIVIO-Windows-CI-UNVERIFIED-${{ github.run_number }}
+          path: |
+            windows-app/dist/**/*.exe
+            windows-app/dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Record actual outcomes and fail if any required gate failed
+        if: always()
+        shell: pwsh
+        env:
+          RESULT_CHROME: ${{ steps.chrome.outcome }}
+          RESULT_DEPS: ${{ steps.deps.outcome }}
+          RESULT_SYNTAX: ${{ steps.syntax.outcome }}
+          RESULT_UNIT: ${{ steps.unit.outcome }}
+          RESULT_TYPECHECK: ${{ steps.typecheck.outcome }}
+          RESULT_PYDEPS: ${{ steps.pydeps.outcome }}
+          RESULT_FACELOCK: ${{ steps.facelock.outcome }}
+          RESULT_BRIDGE: ${{ steps.bridge.outcome }}
+          RESULT_CDP: ${{ steps.cdp.outcome }}
+          RESULT_BUILD: ${{ steps.build.outcome }}
+          RESULT_INSPECT: ${{ steps.inspect.outcome }}
+          RESULT_ARTIFACT: ${{ steps.artifact.outcome }}
+        run: |
+          $results = [ordered]@{
+            Chrome = $env:RESULT_CHROME
+            Dependencies = $env:RESULT_DEPS
+            Syntax = $env:RESULT_SYNTAX
+            JavaScript_tests = $env:RESULT_UNIT
+            Typecheck = $env:RESULT_TYPECHECK
+            Python_deps = $env:RESULT_PYDEPS
+            Face_Lock_real = $env:RESULT_FACELOCK
+            Bridge_HTTP = $env:RESULT_BRIDGE
+            Chrome_CDP = $env:RESULT_CDP
+            EXE_build = $env:RESULT_BUILD
+            EXE_SHA256 = $env:RESULT_INSPECT
+            EXE_artifact = $env:RESULT_ARTIFACT
+          }
+          Add-Content $env:GITHUB_STEP_SUMMARY '### MODOLIVIO Windows CI — actual step outcomes'
+          Add-Content $env:GITHUB_STEP_SUMMARY '| Step | Result |'
+          Add-Content $env:GITHUB_STEP_SUMMARY '|---|---|'
+          foreach ($key in $results.Keys) {
+            $value = $results[$key]
+            Add-Content $env:GITHUB_STEP_SUMMARY "| $key | $value |"
+          }
+          Add-Content $env:GITHUB_STEP_SUMMARY ''
+          Add-Content $env:GITHUB_STEP_SUMMARY 'No Muse login, third-party API, cookie export, production publishing or top-up was performed.'
+          $fail = @($results.Values | Where-Object { $_ -ne 'success' })
+          if ($fail.Count -gt 0) { throw 'QA BLOCKED: one or more required gates did not pass. EXE artifact, if any, is UNVERIFIED.' }

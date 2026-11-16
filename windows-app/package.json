@@ -2,8 +2,14 @@
   "author": "MODOLIVIO",
   "description": "MODOLIVIO — App Video Bán Hàng (bản Windows)",
   "devDependencies": {
-    "electron": "^33.2.1",
-    "electron-builder": "^25.1.8"
+    "electron": "^45.3.2",
+    "electron-builder": "^26.18.0",
+    "typescript": "^5.9.3",
+    "@types/node": "^24.9.0",
+    "@types/ws": "^8.18.1"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
   },
   "license": "UNLICENSED",
   "main": "main.js",
@@ -11,11 +17,13 @@
   "private": true,
   "productName": "MODOLIVIO",
   "scripts": {
-    "check": "node --check main.js && node --check preload.js && node --check server.js && node --check bridge.js && node --check handlers.js",
+    "check": "node --check main.js && node --check preload.js && node --check server.js && node --check bridge.js && node --check handlers.js && node --check p3/sqlite.js && node --check p3/bridge-agent.js && node --check p3/job-queue.js && node --check p3/pipeline.js && node --check p3/providers.js && node --check p3/router.js && node --check p3/session-vault.js && node --check p3/session-health.js && node --check p3/account-safety.js && node --check extension/shopee_grab.js && node --check extension/service-worker.js && node --check extension/popup.js && node --check p3/provider-selector.js && node --check ci/smoke-bridge.js",
+    "test": "node --test test/*.test.js",
+    "typecheck": "tsc --allowJs --checkJs --noEmit --target ES2022 --module commonjs --moduleResolution node --skipLibCheck p3/*.js",
     "dist:win": "electron-builder --win --x64 --publish=never",
     "pack:win": "electron-builder --win --x64 --dir --publish=never",
     "start": "electron .",
     "start:smoke": "electron . --smoke-test"
   },
-  "version": "1.2.0"
+  "version": "1.3.0"
 }

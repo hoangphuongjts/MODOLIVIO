@@ -1,0 +1,34 @@
+Bridge Agent worktree export
+Branch: feature/p3-windows-bridge-agent
+HEAD: cf5870cd80a1f4a2cc0377b2040fce27e4d92439
+Base: main
+Included files are the committed Bridge Agent source delta relative to main.
+Build artifacts and delivery-private binaries are excluded.
+
+Files (status vs main):
+A	windows-app/docs/P3-BRIDGE-AGENT.md
+A	windows-app/extension/manifest.json
+A	windows-app/extension/popup.html
+A	windows-app/extension/popup.js
+A	windows-app/extension/service-worker.js
+A	windows-app/extension/shopee_grab.js
+M	windows-app/main.js
+A	windows-app/p3/account-safety.js
+A	windows-app/p3/bridge-agent.js
+A	windows-app/p3/job-queue.js
+A	windows-app/p3/pipeline.js
+A	windows-app/p3/providers.js
+A	windows-app/p3/router.js
+A	windows-app/p3/session-health.js
+A	windows-app/p3/session-vault.js
+A	windows-app/p3/sqlite.js
+A	windows-app/package-lock.json
+M	windows-app/package.json
+M	windows-app/preload.js
+A	windows-app/test/p3-bridge.test.js
+
+Latest recorded checks: npm run check PASS; npm test 11/11 PASS; npm run typecheck PASS; git diff --check PASS; npm run dist:win exit 0. Windows runtime/live render not verified.
+
+Git status at packaging:
+## feature/p3-windows-bridge-agent...origin/main [ahead 1]
+?? delivery-private/
