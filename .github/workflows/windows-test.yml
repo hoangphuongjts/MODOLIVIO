@@ -164,6 +164,23 @@ jobs:
           Write-Host "EXE: $($exe.Name) bytes=$($exe.Length) sha256=$sha"
           Add-Content $env:GITHUB_STEP_SUMMARY "EXE (QA only): $($exe.Name), $($exe.Length) bytes, SHA-256 $sha"
 
+      - name: Launch packaged portable EXE and verify Electron main-window screenshot
+        id: packagedui
+        if: steps.build.outcome == 'success' && steps.inspect.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: ./ci/smoke-portable-ui.ps1
+
+      - name: Upload packaged UI screenshots and process diagnostics (QA only)
+        id: uiartifact
+        if: always() && steps.build.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MODOLIVIO-Windows-UI-QA-${{ github.run_number }}
+          path: ui-smoke/**
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload build artifact (QA only, NOT a release)
         id: artifact
         if: steps.build.outcome == 'success' && steps.inspect.outcome == 'success'
@@ -173,6 +190,9 @@ jobs:
           path: |
             dist-win/MODOLIVIO-Windows-1.3.0-portable.exe
             dist-win/SHA256SUMS.txt
+            ui-smoke/main-window.png
+            ui-smoke/main-window.json
+            ui-smoke/process-observation.json
           if-no-files-found: error
           retention-days: 7
 
@@ -193,6 +213,8 @@ jobs:
           RESULT_BUILD: ${{ steps.build.outcome }}
           RESULT_INSPECT: ${{ steps.inspect.outcome }}
           RESULT_ARTIFACT: ${{ steps.artifact.outcome }}
+          RESULT_PACKAGED_UI: ${{ steps.packagedui.outcome }}
+          RESULT_UI_ARTIFACT: ${{ steps.uiartifact.outcome }}
         run: |
           $results = [ordered]@{
             Chrome = $env:RESULT_CHROME
@@ -208,6 +230,8 @@ jobs:
             EXE_build = $env:RESULT_BUILD
             EXE_SHA256 = $env:RESULT_INSPECT
             EXE_artifact = $env:RESULT_ARTIFACT
+            Packaged_EXE_UI = $env:RESULT_PACKAGED_UI
+            UI_screenshots_artifact = $env:RESULT_UI_ARTIFACT
           }
           Add-Content $env:GITHUB_STEP_SUMMARY '### MODOLIVIO Windows CI — actual step outcomes'
           Add-Content $env:GITHUB_STEP_SUMMARY '| Step | Result |'

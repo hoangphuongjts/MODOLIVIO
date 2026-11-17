@@ -297,7 +297,15 @@ function createWindow() {
             "({ title: document.title, rootChildren: (document.querySelector('[data-generated-space-root]')||{}).children.length, bodyText: document.body.innerText.slice(0, 400) })",
             true,
           );
-          fs.writeFileSync(path.join(app.getPath("temp"), "modolivio-smoke.json"), JSON.stringify({ errors, state }, null, 2));
+          const windowState = {
+            title: mainWindow.getTitle(),
+            visible: mainWindow.isVisible(),
+            nativeHandle: mainWindow.getNativeWindowHandle().toString("hex"),
+            bounds: mainWindow.getBounds(),
+            pid: process.pid,
+          };
+          const smokeReport = process.env.SMOKE_REPORT || path.join(app.getPath("temp"), "modolivio-smoke.json");
+          fs.writeFileSync(smokeReport, JSON.stringify({ errors, state, window: windowState }, null, 2));
           console.log("SMOKE-TEST state:", JSON.stringify(state));
           console.log("SMOKE-TEST console errors:", errors.length ? JSON.stringify(errors) : "none");
         } catch (e) {
