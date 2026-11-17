@@ -10,11 +10,14 @@ const URL='https://shopee.vn/toner-i.123.456';
 test("App /actions Annie link reads via supplied authenticated shop importer and stores 4+ original images",async t=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),"mo-shop-import-"));
   let called=0;
+  let activeStore;
+  const {storeImportedShopProduct}=require("../p3/shop-import.js");
   const {server,store}=createServer({dataDir:dir,rendererDir:path.resolve(__dirname,'../renderer'),shopImporter:async url=>{
     called++;assert.equal(url,URL);
-    return {ok:true,platform:'shopee',title:'Toner sạch',description:'Mô tả thật',url:URL,
-      images:[1,2,3,4].map(i=>`https://cdn.shopee.vn/file/product${i}.jpg`),imageCount:4};
+    return storeImportedShopProduct(activeStore,{ok:true,platform:'shopee',title:'Toner sạch',description:'Mô tả thật',url:URL,
+      images:[1,2,3,4].map(i=>`https://cdn.shopee.vn/file/product${i}.jpg`),imageCount:4});
   }});
+  activeStore=store;
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   t.after(async()=>{await new Promise(resolve=>server.close(resolve));fs.rmSync(dir,{recursive:true,force:true});});
   const port=server.address().port,endpoint=`http://127.0.0.1:${port}/actions`;

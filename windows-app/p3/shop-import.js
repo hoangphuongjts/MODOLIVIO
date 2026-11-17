@@ -20,6 +20,9 @@ function storeImportedShopProduct(store, snapshot) {
 }
 
 function recordShopAnnieImport(store, userText, result) {
+  if (!Number.isSafeInteger(result?.productId) || result.productId < 1) {
+    throw new Error("SHOP_IMPORT_INVALID: chưa lưu sản phẩm, không đánh dấu đọc xong");
+  }
   const task = store.insert("annieTasks", { title: `Đọc link ${result.platform}: ${result.title}`,
     kind: "read-product", status: "done", productId: result.productId,
     detail: `Đã đọc tên, mô tả và ${result.imageCount} ảnh từ phiên sàn WebContentsView; không lấy cookie.`, seen: 0 });
