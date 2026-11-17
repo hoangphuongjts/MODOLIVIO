@@ -89,7 +89,7 @@ def main() -> int:
     p.add_argument("--runtime", required=True, type=Path)
     args = p.parse_args()
     try:
-        print("UI_THREE_SCREEN_RESULT " + json.dumps(verify(args.dir, args.runtime), ensure_ascii=False))
+        print("UI_THREE_SCREEN_RESULT " + json.dumps(verify(args.dir, args.runtime), ensure_ascii=True))
         return 0
     except Exception as e:
         print("UI_THREE_SCREEN_FAIL " + str(e), file=sys.stderr)

@@ -26,6 +26,7 @@ $env:SMOKE_OUT_DIR = $outDir
 $env:SMOKE_USER_DATA_DIR = Join-Path $env:RUNNER_TEMP ('modolivio-ui-user-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $env:SMOKE_USER_DATA_DIR -Force | Out-Null
 $env:ELECTRON_ENABLE_LOGGING = '1'
+$env:PYTHONIOENCODING = 'utf-8'
 
 $launcher = $null
 $parentAlive = $false
