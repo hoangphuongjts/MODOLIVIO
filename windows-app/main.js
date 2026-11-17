@@ -15,6 +15,10 @@ const { SessionHealthMonitor, AutoReloginEngine } = require("./p3/session-health
 const APP_VERSION = "1.3.0-win1";
 const VIENEU_URL = process.env.MODOLIVIO_VIENEU_URL || "http://127.0.0.1:8123";
 const SMOKE_TEST = process.argv.includes("--smoke-test");
+if (SMOKE_TEST && process.env.SMOKE_USER_DATA_DIR) {
+  fs.mkdirSync(process.env.SMOKE_USER_DATA_DIR, { recursive: true });
+  app.setPath("userData", process.env.SMOKE_USER_DATA_DIR);
+}
 
 let mainWindow = null;
 let localServer = null;
@@ -283,40 +287,149 @@ function createWindow() {
   });
 
   if (SMOKE_TEST) {
+    // Screenshots are from the *packaged Electron renderer*, never the Windows console.
+    // Do not navigate to muse.ai, open a Muse profile, or reuse a user's Electron session.
     const errors = [];
-    mainWindow.webContents.on("console-message", (_e, level, message, line, sourceId) => {
-      if (level === "error") errors.push(`${sourceId}:${line}: ${message}`);
+    let started = false;
+    const outputDir = process.env.SMOKE_OUT_DIR || path.join(app.getPath("temp"), "modolivio-ui-smoke");
+    fs.mkdirSync(outputDir, { recursive: true });
+    const reportFile = path.join(outputDir, "smoke-report.json");
+    const frames = [];
+    const actions = [];
+    const watchdog = setTimeout(() => {
+      errors.push("Timeout waiting for renderer UI smoke (60s)");
+      fs.writeFileSync(reportFile, JSON.stringify({ status: "FAIL", errors, frames, actions }, null, 2));
+      app.exit(2);
+    }, 60000);
+    watchdog.unref?.();
+    const wc = mainWindow.webContents;
+    wc.on("console-message", (_e, level, message, line, sourceId) => {
+      if (level === "error") errors.push(`Console ${sourceId}:${line}: ${message}`);
     });
-    mainWindow.webContents.on("did-finish-load", () => {
-      setTimeout(async () => {
+    wc.on("render-process-gone", (_e, details) => errors.push(`Renderer gone: ${JSON.stringify(details)}`));
+    wc.on("did-fail-load", (_e, code, reason, url, isMainFrame) => {
+      if (isMainFrame && code !== -3) errors.push(`Main-frame load failed ${code}: ${reason} ${url}`);
+    });
+    const evaluate = (expression) => wc.executeJavaScript(expression, true);
+    const snapshotExpression = `(() => {
+      const root = document.querySelector('[data-generated-space-root]');
+      return {
+        title: document.title,
+        url: location.href,
+        rootChildren: root ? root.children.length : 0,
+        bodyText: (document.body?.innerText || '').slice(0, 1500),
+        clicks: (window.__modolivioSmokeClicks || []).slice(),
+      };
+    })()`;
+    const windowState = () => ({
+      title: mainWindow.getTitle(),
+      visible: mainWindow.isVisible(),
+      nativeHandle: mainWindow.getNativeWindowHandle().toString("hex"),
+      bounds: mainWindow.getBounds(),
+      pid: process.pid,
+    });
+    async function captureFrame(stage, filename) {
+      const state = await evaluate(snapshotExpression);
+      if (!state.title.includes("MODOLIVIO") || state.rootChildren < 1 || state.bodyText.length < 100) {
+        throw new Error(`Renderer not ready for ${stage}: ${JSON.stringify(state)}`);
+      }
+      const bytes = (await wc.capturePage()).toPNG();
+      if (bytes.length < 10000) throw new Error(`PNG too small for ${stage}: ${bytes.length} bytes`);
+      fs.writeFileSync(path.join(outputDir, filename), bytes);
+      frames.push({ stage, filename, sizeBytes: bytes.length, state, window: windowState() });
+      console.log("SMOKE-RENDERER-FRAME", JSON.stringify({ stage, filename, sizeBytes: bytes.length,
+        title: state.title, bodyPreview: state.bodyText.slice(0, 140) }));
+    }
+    async function clickVisibleControl(label) {
+      // Use native renderer mouse input: NOT DOM element.click() and NOT a desktop screenshot.
+      const locator = `(() => {
+        const label = ${JSON.stringify(label)};
+        const normalize = v => (v || '').replace(/\\s+/g, ' ').trim();
+        const candidates = [...document.querySelectorAll('button, [role="button"], [role="tab"], a')];
+        const el = candidates.find(n => normalize(n.innerText || n.textContent) === label) ||
+          candidates.find(n => { const t = normalize(n.innerText || n.textContent); return t.endsWith(label) && t.length < label.length + 8; });
+        if (!el) return { found: false, requested: label, nearby: candidates.map(n => normalize(n.innerText || n.textContent)).filter(Boolean).slice(0, 40) };
+        el.scrollIntoView({ block: 'center', inline: 'center' });
+        const r = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return { found: true, requested: label, actualText: normalize(el.innerText || el.textContent),
+          x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2),
+          disabled: !!el.disabled, visible: r.width > 2 && r.height > 2 && style.visibility !== 'hidden' && style.display !== 'none',
+          viewportWidth: innerWidth, viewportHeight: innerHeight };
+      })()`;
+      const target = await evaluate(locator);
+      if (!target.found || !target.visible || target.disabled) throw new Error(`Control not interactable: ${JSON.stringify(target)}`);
+      if (target.x < 0 || target.y < 0 || target.x >= target.viewportWidth || target.y >= target.viewportHeight) {
+        throw new Error(`Control outside viewport: ${JSON.stringify(target)}`);
+      }
+      mainWindow.show();
+      mainWindow.focus();
+      wc.focus();
+      wc.sendInputEvent({ type: "mouseMove", x: target.x, y: target.y });
+      wc.sendInputEvent({ type: "mouseDown", x: target.x, y: target.y, button: "left", clickCount: 1 });
+      wc.sendInputEvent({ type: "mouseUp", x: target.x, y: target.y, button: "left", clickCount: 1 });
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      const state = await evaluate(snapshotExpression);
+      const last = state.clicks[state.clicks.length - 1];
+      if (!last || !(last.text || "").endsWith(label)) {
+        throw new Error(`No renderer click event confirmed for ${label}: ${JSON.stringify(state.clicks)}`);
+      }
+      actions.push({ label, target, click: last, stateAfter: { title: state.title, bodyPreview: state.bodyText.slice(0, 180) } });
+      console.log("SMOKE-RENDERER-CLICK", JSON.stringify({ label, target, click: last }));
+    }
+    wc.on("did-finish-load", () => {
+      if (started) return;
+      started = true;
+      void (async () => {
         try {
-          const shot = await mainWindow.webContents.capturePage();
-          const out = process.env.SMOKE_SHOT || path.join(app.getPath("temp"), "modolivio-smoke.png");
-          fs.writeFileSync(out, shot.toPNG());
-          const state = await mainWindow.webContents.executeJavaScript(
-            "({ title: document.title, rootChildren: (document.querySelector('[data-generated-space-root]')||{}).children.length, bodyText: document.body.innerText.slice(0, 400) })",
-            true,
-          );
-          const windowState = {
-            title: mainWindow.getTitle(),
-            visible: mainWindow.isVisible(),
-            nativeHandle: mainWindow.getNativeWindowHandle().toString("hex"),
-            bounds: mainWindow.getBounds(),
-            pid: process.pid,
-          };
-          const smokeReport = process.env.SMOKE_REPORT || path.join(app.getPath("temp"), "modolivio-smoke.json");
-          fs.writeFileSync(smokeReport, JSON.stringify({ errors, state, window: windowState }, null, 2));
-          console.log("SMOKE-TEST state:", JSON.stringify(state));
-          console.log("SMOKE-TEST console errors:", errors.length ? JSON.stringify(errors) : "none");
-        } catch (e) {
-          console.log("SMOKE-TEST failed:", e.message);
-          process.exitCode = 1;
+          // React can mount later than did-finish-load; do not capture an empty view.
+          let ready = false;
+          for (let tries = 0; tries < 30; tries++) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+            const state = await evaluate(snapshotExpression);
+            if (state.rootChildren >= 1 && state.bodyText.includes("Làm nhanh") && state.bodyText.includes("Tổng quan")) {
+              ready = true;
+              break;
+            }
+          }
+          if (!ready) throw new Error("Renderer UI did not become interactive after 15 seconds");
+          mainWindow.show();
+          mainWindow.focus();
+          wc.focus();
+          await evaluate(`(() => {
+            window.__modolivioSmokeClicks = [];
+            document.addEventListener('click', event => {
+              const el = event.target.closest('button, [role="button"], [role="tab"], a');
+              const text = ((el && (el.innerText || el.textContent)) || '').replace(/\\s+/g, ' ').trim();
+              window.__modolivioSmokeClicks.push({ text, isTrusted: event.isTrusted, tag: el?.tagName || null });
+            }, true);
+            return true;
+          })()`);
+          await captureFrame("main", "01-main.png");
+          await clickVisibleControl("Làm nhanh");
+          await captureFrame("lam-nhanh", "02-lam-nhanh.png");
+          await clickVisibleControl("Tổng quan");
+          await captureFrame("tong-quan", "03-tong-quan.png");
+          if (errors.length) throw new Error(`Renderer errors: ${errors.join(" | ")}`);
+          fs.writeFileSync(reportFile, JSON.stringify({ status: "PASS", source: "packaged-electron-renderer",
+            frames, actions, errors, window: windowState() }, null, 2));
+          console.log("SMOKE-RENDERER-PASS", JSON.stringify({ files: frames.map(f => f.filename),
+            clicks: actions.map(a => a.label), window: windowState() }));
+          clearTimeout(watchdog);
+          app.quit();
+        } catch (error) {
+          errors.push(String(error && error.stack || error));
+          fs.writeFileSync(reportFile, JSON.stringify({ status: "FAIL", source: "packaged-electron-renderer",
+            frames, actions, errors, window: windowState() }, null, 2));
+          console.error("SMOKE-RENDERER-FAIL", error);
+          clearTimeout(watchdog);
+          app.exit(2);
         }
-        app.quit();
-      }, 6000);
+      })();
     });
   }
 }
+
 
 ipcMain.handle("modolivio:get-info", () => ({
   version: APP_VERSION,

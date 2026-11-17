@@ -8,12 +8,12 @@ $outDir = Join-Path $repoRoot 'ui-smoke'
 $exe = Join-Path $repoRoot 'dist-win\MODOLIVIO-Windows-1.3.0-portable.exe'
 if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "Portable EXE missing: $exe" }
 New-Item -ItemType Directory -Path $outDir -Force | Out-Null
-$shot = Join-Path $outDir 'main-window.png'
-$report = Join-Path $outDir 'main-window.json'
+$shots = @('01-main.png', '02-lam-nhanh.png', '03-tong-quan.png')
+$report = Join-Path $outDir 'smoke-report.json'
 $runtime = Join-Path $outDir 'process-observation.json'
 $stdout = Join-Path $outDir 'startup.stdout.log'
 $stderr = Join-Path $outDir 'startup.stderr.log'
-foreach ($file in @($shot, $report, $runtime, $stdout, $stderr)) {
+foreach ($file in @($report, $runtime, $stdout, $stderr) + @($shots | ForEach-Object { Join-Path $outDir $_ })) {
   Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue
 }
 
@@ -22,8 +22,9 @@ $env:MODOLIVIO_MUSE_ENGINE = '0'
 $env:MODOLIVIO_MUSE_LIVE = '0'
 $env:MODOLIVIO_MUSE_ALLOWED_PROFILE_ID = ''
 $env:MODOLIVIO_RENDER_PROVIDER = 'seedance'
-$env:SMOKE_SHOT = $shot
-$env:SMOKE_REPORT = $report
+$env:SMOKE_OUT_DIR = $outDir
+$env:SMOKE_USER_DATA_DIR = Join-Path $env:RUNNER_TEMP ('modolivio-ui-user-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $env:SMOKE_USER_DATA_DIR -Force | Out-Null
 $env:ELECTRON_ENABLE_LOGGING = '1'
 
 $launcher = $null
@@ -50,7 +51,7 @@ try {
         }
       }
     }
-    if ((Test-Path -LiteralPath $shot) -and (Test-Path -LiteralPath $report)) { break }
+    if ((Test-Path -LiteralPath $report)) { break }
     if ($launcher.HasExited) { break }
     Start-Sleep -Milliseconds 250
   }
@@ -65,7 +66,7 @@ try {
     windowTitles = @($observedWindowTitles | Sort-Object -Unique)
     launcherExited = $exited
     launcherExitCode = $exitCode
-    screenshotExists = Test-Path -LiteralPath $shot -PathType Leaf
+    screenshots = @($shots | ForEach-Object { @{ file = $_; exists = (Test-Path -LiteralPath (Join-Path $outDir $_) -PathType Leaf) } })
     reportExists = Test-Path -LiteralPath $report -PathType Leaf
   }
   $observation | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $runtime -Encoding utf8
@@ -74,20 +75,23 @@ try {
   if ($exitCode -ne 0) { throw "Portable launcher failed: exit code $exitCode" }
   if (-not $parentAlive) { throw 'Portable launcher was never observed alive' }
   if (-not $electronAlive) { throw 'No extracted MODOLIVIO Electron process was observed' }
-  if (-not (Test-Path -LiteralPath $shot -PathType Leaf)) { throw 'Packaged Electron did not produce main-window.png' }
-  if (-not (Test-Path -LiteralPath $report -PathType Leaf)) { throw 'Packaged Electron did not produce main-window.json' }
-  python (Join-Path $PSScriptRoot 'verify-ui-smoke.py') --shot $shot --report $report --runtime $runtime
+  foreach ($file in $shots) { if (-not (Test-Path -LiteralPath (Join-Path $outDir $file) -PathType Leaf)) { throw "Missing renderer PNG $file" } }
+  if (-not (Test-Path -LiteralPath $report -PathType Leaf)) { throw 'Packaged Electron did not produce smoke-report.json' }
+  python (Join-Path $PSScriptRoot 'verify-ui-smoke.py') --dir $outDir --runtime $runtime
   if ($LASTEXITCODE -ne 0) { throw "Packaged UI screenshot verification failed (exit $LASTEXITCODE)" }
-  Write-Host "PASS: portable EXE, Electron process, BrowserWindow, renderer and PNG validated: $shot"
+  Write-Host "PASS: packaged EXE, Electron BrowserWindow, 2 trusted mouse clicks, 3 real renderer screenshots: $outDir"
 } finally {
   if ($launcher) {
     $launcher.Refresh()
     if (-not $launcher.HasExited) { Stop-Process -Id $launcher.Id -Force -ErrorAction SilentlyContinue }
   }
+  if (Test-Path -LiteralPath $report) { Write-Host '--- Electron renderer report ---'; Get-Content -LiteralPath $report -TotalCount 200 | ForEach-Object { Write-Host $_ } }
   foreach ($f in @($stdout, $stderr)) {
     if ((Test-Path -LiteralPath $f) -and ((Get-Item -LiteralPath $f).Length -gt 0)) {
       Write-Host ("--- " + [IO.Path]::GetFileName($f) + " (tail) ---")
       Get-Content -LiteralPath $f -Tail 30 | ForEach-Object { Write-Host $_ }
     }
   }
+  # CI profile is isolated in RUNNER_TEMP, never imported from the user.
+  if ($env:SMOKE_USER_DATA_DIR -and (Test-Path $env:SMOKE_USER_DATA_DIR)) { Remove-Item $env:SMOKE_USER_DATA_DIR -Recurse -Force -ErrorAction SilentlyContinue }
 }

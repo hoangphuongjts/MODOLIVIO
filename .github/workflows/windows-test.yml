@@ -164,7 +164,7 @@ jobs:
           Write-Host "EXE: $($exe.Name) bytes=$($exe.Length) sha256=$sha"
           Add-Content $env:GITHUB_STEP_SUMMARY "EXE (QA only): $($exe.Name), $($exe.Length) bytes, SHA-256 $sha"
 
-      - name: Launch packaged portable EXE and verify Electron main-window screenshot
+      - name: Launch packaged portable EXE, click Làm nhanh/Tổng quan, validate three renderer screenshots
         id: packagedui
         if: steps.build.outcome == 'success' && steps.inspect.outcome == 'success'
         continue-on-error: true
@@ -190,8 +190,10 @@ jobs:
           path: |
             dist-win/MODOLIVIO-Windows-1.3.0-portable.exe
             dist-win/SHA256SUMS.txt
-            ui-smoke/main-window.png
-            ui-smoke/main-window.json
+            ui-smoke/01-main.png
+            ui-smoke/02-lam-nhanh.png
+            ui-smoke/03-tong-quan.png
+            ui-smoke/smoke-report.json
             ui-smoke/process-observation.json
           if-no-files-found: error
           retention-days: 7
