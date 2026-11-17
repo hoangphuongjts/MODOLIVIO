@@ -331,14 +331,47 @@ function createWindow() {
     async function captureFrame(stage, filename) {
       const state = await evaluate(snapshotExpression);
       if (!state.title.includes("MODOLIVIO") || state.rootChildren < 1 || state.bodyText.length < 100) {
-        throw new Error(`Renderer not ready for ${stage}: ${JSON.stringify(state)}`);
+        throw new Error(`Renderer DOM not ready for ${stage}: ${JSON.stringify(state)}`);
       }
-      const bytes = (await wc.capturePage()).toPNG();
-      if (bytes.length < 10000) throw new Error(`PNG too small for ${stage}: ${bytes.length} bytes`);
-      fs.writeFileSync(path.join(outputDir, filename), bytes);
-      frames.push({ stage, filename, sizeBytes: bytes.length, state, window: windowState() });
-      console.log("SMOKE-RENDERER-FRAME", JSON.stringify({ stage, filename, sizeBytes: bytes.length,
-        title: state.title, bodyPreview: state.bodyText.slice(0, 140) }));
+      // DOM readiness and a successful capturePage() do NOT guarantee the first
+      // Chromium compositor frame has actually painted on a Windows VM.
+      // Retry only until REAL pixels contain enough app contrast and text strokes.
+      let accepted = null;
+      let metrics = null;
+      for (let attempt = 1; attempt <= 24; attempt++) {
+        const shot = await wc.capturePage();
+        const bytes = shot.toPNG();
+        const bitmap = shot.getBitmap();
+        let samples = 0, total = 0, squared = 0, dark = 0;
+        for (let i = 0; i + 3 < bitmap.length; i += 4 * 80) {
+          const lum = (bitmap[i] + bitmap[i + 1] + bitmap[i + 2]) / 3;
+          total += lum;
+          squared += lum * lum;
+          if (lum < 190) dark++;
+          samples++;
+        }
+        const mean = samples ? total / samples : 0;
+        const std = samples ? Math.sqrt(Math.max(0, squared / samples - mean * mean)) : 0;
+        const darkRatio = samples ? dark / samples : 0;
+        metrics = { attempt, bytes: bytes.length, samples, luminanceStd: Number(std.toFixed(2)),
+          darkRatio: Number(darkRatio.toFixed(4)) };
+        if (bytes.length >= 25000 && std >= 10 && darkRatio >= 0.015) {
+          accepted = bytes;
+          break;
+        }
+        console.warn("SMOKE-FRAME-NOT-PAINTED", JSON.stringify({ stage, ...metrics }));
+        // A pointer move can stimulate a compositor frame on headless-ish VMs.
+        mainWindow.show();
+        mainWindow.focus();
+        wc.focus();
+        wc.sendInputEvent({ type: "mouseMove", x: 30 + attempt % 20, y: 30 });
+        await new Promise(resolve => setTimeout(resolve, 400));
+      }
+      if (!accepted) throw new Error(`No painted renderer screenshot for ${stage} after 24 attempts: ${JSON.stringify(metrics)}`);
+      fs.writeFileSync(path.join(outputDir, filename), accepted);
+      frames.push({ stage, filename, sizeBytes: accepted.length, quality: metrics, state, window: windowState() });
+      console.log("SMOKE-RENDERER-FRAME", JSON.stringify({ stage, filename, sizeBytes: accepted.length,
+        quality: metrics, title: state.title, bodyPreview: state.bodyText.slice(0, 140) }));
     }
     async function clickVisibleControl(label) {
       // Use native renderer mouse input: NOT DOM element.click() and NOT a desktop screenshot.
