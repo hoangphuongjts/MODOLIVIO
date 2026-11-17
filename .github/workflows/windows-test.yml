@@ -118,7 +118,7 @@ jobs:
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Fetch open-source OpenCV Zoo models for temporary Windows CI
+      - name: Fetch verified OpenCV Zoo models and public face fixtures for temporary Windows CI
         id: facemodels
         continue-on-error: true
         shell: pwsh
@@ -155,15 +155,14 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
-          $exe = Get-ChildItem -Path dist -Recurse -Filter '*.exe' -File -ErrorAction SilentlyContinue
-          if (-not $exe) { throw 'electron-builder produced no EXE file' }
-          $lines = @()
-          foreach ($item in $exe) {
-            $sha = (Get-FileHash $item.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            $lines += "$sha  $($item.FullName.Substring((Get-Location).Path.Length+1))"
-            Write-Host "EXE: $($item.Name) bytes=$($item.Length) sha256=$sha"
-          }
-          $lines | Set-Content 'dist/SHA256SUMS.txt' -Encoding utf8
+          $outputDir = Join-Path (Get-Location).Path '..\dist-win'
+          $exePath = Join-Path $outputDir 'MODOLIVIO-Windows-1.3.0-portable.exe'
+          if (-not (Test-Path -LiteralPath $exePath -PathType Leaf)) { throw "EXE missing: $exePath" }
+          $exe = Get-Item -LiteralPath $exePath
+          $sha = (Get-FileHash -LiteralPath $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$sha  $($exe.Name)" | Set-Content (Join-Path $outputDir 'SHA256SUMS.txt') -Encoding ascii
+          Write-Host "EXE: $($exe.Name) bytes=$($exe.Length) sha256=$sha"
+          Add-Content $env:GITHUB_STEP_SUMMARY "EXE (QA only): $($exe.Name), $($exe.Length) bytes, SHA-256 $sha"
 
       - name: Upload build artifact (QA only, NOT a release)
         id: artifact
@@ -172,8 +171,8 @@ jobs:
         with:
           name: MODOLIVIO-Windows-CI-UNVERIFIED-${{ github.run_number }}
           path: |
-            windows-app/dist/**/*.exe
-            windows-app/dist/SHA256SUMS.txt
+            dist-win/MODOLIVIO-Windows-1.3.0-portable.exe
+            dist-win/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 7
 

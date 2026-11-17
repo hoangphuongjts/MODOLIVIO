@@ -1,6 +1,6 @@
 """Test cho Face Lock verifier (YuNet + SFace). Chạy: <venv>/bin/python -m pytest test_faceLockVerifier.py -v
-Yêu cầu model trong models/ (đã tải sẵn). Test e2e cần ảnh mặt thật — dùng ảnh
-canh-1-chot-nhan-vat-2/3.webp trong media library nếu có, bỏ qua nếu thiếu.
+Yêu cầu model trong models/ (đã tải sẵn). Test e2e dùng hai ảnh chân dung demo công khai, tải vào fixtures/ trên runner
+(tệp không được commit hoặc upload). Ảnh thực của người dùng vẫn chờ kiểm chứng riêng.
 """
 import os
 import sys
@@ -38,8 +38,8 @@ def test_missing_file_returns_error():
 
 
 # --- e2e với ảnh nhân vật thật (bỏ qua nếu không có ảnh) ---
-IMG2 = "/home/hatch/workspace/user/media_library/image/canh-1-chot-nhan-vat-2.webp"
-IMG3 = "/home/hatch/workspace/user/media_library/image/canh-1-chot-nhan-vat-3.webp"
+IMG2 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "obama.jpg")
+IMG3 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "biden.jpg")
 
 
 @pytest.mark.skipif(not (os.path.exists(IMG2) and os.path.exists(IMG3)),

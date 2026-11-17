@@ -1,1 +1,46 @@
-{"appId":"vn.modolivio.app","asar":true,"directories":{"app":".","output":"../dist-win"},"files":["**/*","!**/node_modules/.bin"],"mac":{"category":"public.app-category.productivity"},"nsis":{"allowToChangeInstallationDirectory":true,"createDesktopShortcut":true,"createStartMenuShortcut":true,"oneClick":false,"shortcutName":"MODOLIVIO"},"portable":{"artifactName":"${productName}-Windows-${version}-portable.${ext}"},"productName":"MODOLIVIO","win":{"artifactName":"${productName}-Windows-${version}-setup.${ext}","icon":"assets/icon.ico","signAndEditExecutable":false,"target":[{"arch":["x64"],"target":"dir"},{"arch":["x64"],"target":"portable"}]}}
+{
+  "appId": "vn.modolivio.app",
+  "asar": true,
+  "directories": {
+    "app": ".",
+    "output": "../dist-win"
+  },
+  "files": [
+    "**/*",
+    "!**/node_modules/.bin",
+    "!muse-engine/python/fixtures/**"
+  ],
+  "mac": {
+    "category": "public.app-category.productivity"
+  },
+  "nsis": {
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "oneClick": false,
+    "shortcutName": "MODOLIVIO"
+  },
+  "portable": {
+    "artifactName": "${productName}-Windows-${version}-portable.${ext}"
+  },
+  "productName": "MODOLIVIO",
+  "win": {
+    "artifactName": "${productName}-Windows-${version}-setup.${ext}",
+    "icon": "assets/icon.ico",
+    "signAndEditExecutable": false,
+    "target": [
+      {
+        "arch": [
+          "x64"
+        ],
+        "target": "dir"
+      },
+      {
+        "arch": [
+          "x64"
+        ],
+        "target": "portable"
+      }
+    ]
+  }
+}

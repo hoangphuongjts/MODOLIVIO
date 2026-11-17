@@ -12,3 +12,7 @@ __pycache__/
 # Local face models are downloaded only from the verified OpenCV Zoo source.
 windows-app/muse-engine/python/models/*.onnx
 windows-app/muse-engine/python/models/*.onnx.*
+
+# Ephemeral CI test portraits and Windows build output are not source assets.
+windows-app/muse-engine/python/fixtures/
+dist-win/
