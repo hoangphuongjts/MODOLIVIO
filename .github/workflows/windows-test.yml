@@ -51,6 +51,11 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Verify official MODOLIVIO logo is present before expensive Windows build
+        id: branding
+        shell: pwsh
+        run: python ci/verify-brand-assets.py
+
       - name: Verify Windows Chrome installation
         id: chrome
         shell: pwsh

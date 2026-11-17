@@ -53,6 +53,13 @@ function createServer({ dataDir, rendererDir }) {
   const server = http.createServer((req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     const pathname = decodeURIComponent(url.pathname);
+    if (req.method === "GET" && pathname === "/favicon.ico") {
+      // Chromium may request this legacy URL even when the HTML links a PNG icon.
+      const logo = path.join(rendererDir, "assets", "logo-mo-6562vk78.png");
+      if (!fs.existsSync(logo)) return sendJson(res, 404, { error: "Official MODOLIVIO logo asset missing" });
+      res.writeHead(302, { location: "/assets/logo-mo-6562vk78.png", "cache-control": "no-store" });
+      return res.end();
+    }
 
     if (req.method === "GET" && pathname === "/health") {
       return sendJson(res, 200, { ok: true, app: "MODOLIVIO Windows", version: "1.2.0-win1", dataDir, rendererDir });

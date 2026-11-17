@@ -48,6 +48,9 @@ def verify(directory: Path, runtime: Path) -> dict:
         if expected.get("stage") != stage or expected.get("filename") != filename:
             raise ValueError(f"Unexpected frame order for {filename}: {expected}")
         info = expected.get("state") or {}
+        logos = info.get("brandImages") or []
+        if not logos or any(not image.get("complete") or int(image.get("naturalWidth", 0)) <= 0 for image in logos):
+            raise ValueError(f"OFFICIAL-LOGO-NOT-LOADED for {stage}: {logos}")
         window = expected.get("window") or {}
         if "modolivio" not in str(info.get("title", "")).lower():
             raise ValueError(f"Wrong renderer title for {stage}")

@@ -319,6 +319,9 @@ function createWindow() {
         rootChildren: root ? root.children.length : 0,
         bodyText: (document.body?.innerText || '').slice(0, 1500),
         clicks: (window.__modolivioSmokeClicks || []).slice(),
+        brandImages: Array.from(document.querySelectorAll('img[alt="Logo MODOLIVIO"]')).map(img => ({
+          src: img.currentSrc || img.src, complete: img.complete, naturalWidth: img.naturalWidth,
+        })),
       };
     })()`;
     const windowState = () => ({
@@ -329,7 +332,16 @@ function createWindow() {
       pid: process.pid,
     });
     async function captureFrame(stage, filename) {
-      const state = await evaluate(snapshotExpression);
+      let state = await evaluate(snapshotExpression);
+      // Do not allow CI to PASS when the official header logo has a broken image icon.
+      for (let tries = 0; tries < 20; tries++) {
+        if (state.brandImages?.length && state.brandImages.every(img => img.complete && img.naturalWidth > 0)) break;
+        await new Promise(resolve => setTimeout(resolve, 250));
+        state = await evaluate(snapshotExpression);
+      }
+      if (!state.brandImages?.length || state.brandImages.some(img => !img.complete || img.naturalWidth < 1)) {
+        throw new Error(`OFFICIAL-LOGO-NOT-LOADED ${stage}: ${JSON.stringify(state.brandImages)}`);
+      }
       if (!state.title.includes("MODOLIVIO") || state.rootChildren < 1 || state.bodyText.length < 100) {
         throw new Error(`Renderer DOM not ready for ${stage}: ${JSON.stringify(state)}`);
       }
