@@ -14,7 +14,7 @@ function extractProductSnapshot(doc = document, href = location.href) {
     return { ok: false, reason: "LOGIN_REQUIRED", message: "Phiên sàn cần đăng nhập lại trong app" };
   }
   if (/captcha|verify|challenge/.test(path) || has('iframe[src*="captcha"], [class*="captcha" i], [id*="captcha" i]') || /captcha|xác minh bạn là người/.test(pageText)) {
-    return { ok: false, reason: "CAPTCHA", message: "Trang yêu cầu xác minh thủ công; không tự vượt CAPTCHA" };
+    return { ok: false, reason: "CAPTCHA_REQUIRED", message: "Trang yêu cầu xác minh thủ công; không tự vượt CAPTCHA" };
   }
   const text = (value, limit = 2500) => String(value || "").replace(/\s+/g, " ").trim().slice(0, limit);
   const getMeta = (selectors) => { for (const selector of selectors) { const node = doc.querySelector(selector); if (node?.content) return text(node.content); } return ""; };

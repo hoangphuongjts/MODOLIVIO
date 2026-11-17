@@ -58,9 +58,11 @@ function extractProductSnapshot(doc = document, href = location.href) {
   };
   addImage(structured.image);
   for (const n of doc.querySelectorAll('meta[property="og:image"],meta[property="og:image:secure_url"],meta[name="twitter:image"]'))
-    addImage(n.content);
-  for (const img of doc.querySelectorAll('main img, [class*="product" i] img, [class*="gallery" i] img, [class*="image" i] img, img'))
+    addImage((/** @type {HTMLMetaElement} */ (n)).content);
+  for (const element of doc.querySelectorAll('main img, [class*="product" i] img, [class*="gallery" i] img, [class*="image" i] img, img')) {
+    const img = /** @type {HTMLImageElement} */ (element);
     addImage(img.currentSrc || img.src || img.getAttribute?.("data-src") || img.getAttribute?.("data-original"), img.naturalWidth || 0, img.naturalHeight || 0);
+  }
   return {
     ok: Boolean(title && description), reason: title && description ? "OK" : "PRODUCT_NOT_FOUND",
     message: title && description ? "Đã đọc dữ liệu sản phẩm" : "Chưa đủ tên/mô tả sản phẩm",
@@ -72,12 +74,13 @@ function extractProductSnapshot(doc = document, href = location.href) {
 
 if (typeof module !== "undefined") module.exports = { extractProductSnapshot };
 // Existing extension compatibility: a content script can still supply a snapshot.
-if (typeof chrome !== "undefined" && chrome.runtime?.onMessage) {
-  if (chrome.runtime?.sendMessage) {
-    try { chrome.runtime.sendMessage({ type: "PRODUCT_SNAPSHOT", product: extractProductSnapshot() }); }
+const extensionChrome = /** @type {any} */ (globalThis).chrome;
+if (extensionChrome?.runtime?.onMessage) {
+  if (extensionChrome.runtime?.sendMessage) {
+    try { extensionChrome.runtime.sendMessage({ type: "PRODUCT_SNAPSHOT", product: extractProductSnapshot() }); }
     catch { /* outside a supported product page */ }
   }
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  extensionChrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg?.type !== "EXTRACT") return false;
     try { sendResponse({ ok: true, product: extractProductSnapshot() }); }
     catch (error) { sendResponse({ ok: false, error: String(error.message || error) }); }

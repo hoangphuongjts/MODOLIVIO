@@ -21,6 +21,7 @@ function isShopNavigation(platform, href) {
 }
 
 class ShopSessionController {
+  /** @param {{BrowserWindow?: any, WebContentsView?: any, session?: any, readProduct?: any}} [options] */
   constructor({ BrowserWindow, WebContentsView, session, readProduct = readProductFromWebContents } = {}) {
     if (!BrowserWindow || !WebContentsView || !session?.fromPartition) throw new Error("SHOP_ELECTRON_UNAVAILABLE");
     this.BrowserWindow = BrowserWindow;
