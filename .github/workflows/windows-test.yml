@@ -148,6 +148,19 @@ jobs:
         shell: pwsh
         run: ./ci/smoke-cdp.ps1
 
+      - name: S5 offline vertical slice (synthetic clips, loopback TTS mock, FFmpeg; NEVER Muse)
+        id: s5offline
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) { throw 'FFmpeg missing on Windows runner: S5 OFFLINE BLOCKED' }
+          if (-not (Get-Command ffprobe -ErrorAction SilentlyContinue)) { throw 'FFprobe missing on Windows runner: S5 OFFLINE BLOCKED' }
+          $output = Join-Path $env:RUNNER_TEMP 'modolivio-s5-offline'
+          node tools/s5-vertical-slice.js --ci-mock --out "$output"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path (Join-Path $output 'ci-evidence.json'))) { throw 'S5 mock evidence missing' }
+          Add-Content $env:GITHUB_STEP_SUMMARY 'S5 OFFLINE ONLY: 3 synthetic scenes x 10s, loopback TTS mock, 30s 9:16 MP4; NO Muse execution'
+
       - name: Build Windows EXE with electron-builder (unverified QA binary)
         id: build
         continue-on-error: true
@@ -216,6 +229,7 @@ jobs:
           RESULT_FACELOCK: ${{ steps.facelock.outcome }}
           RESULT_MODELS: ${{ steps.facemodels.outcome }}
           RESULT_BRIDGE: ${{ steps.bridge.outcome }}
+          RESULT_S5_OFFLINE: ${{ steps.s5offline.outcome }}
           RESULT_CDP: ${{ steps.cdp.outcome }}
           RESULT_BUILD: ${{ steps.build.outcome }}
           RESULT_INSPECT: ${{ steps.inspect.outcome }}
@@ -233,6 +247,7 @@ jobs:
             Face_Lock_models = $env:RESULT_MODELS
             Face_Lock_real = $env:RESULT_FACELOCK
             Bridge_HTTP = $env:RESULT_BRIDGE
+            S5_offline_vertical_slice = $env:RESULT_S5_OFFLINE
             Chrome_CDP = $env:RESULT_CDP
             EXE_build = $env:RESULT_BUILD
             EXE_SHA256 = $env:RESULT_INSPECT

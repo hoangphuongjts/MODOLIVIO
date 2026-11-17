@@ -14,7 +14,7 @@ function extractProductSnapshot(doc = document, href = location.href) {
     return { ok: false, reason: "LOGIN_REQUIRED", message: "Phiên sàn cần đăng nhập lại trong app" };
   }
   if (/captcha|verify|challenge/.test(path) || has('iframe[src*="captcha"], [class*="captcha" i], [id*="captcha" i]') || /captcha|xác minh bạn là người/.test(pageText)) {
-    return { ok: false, reason: "CAPTCHA", message: "Trang yêu cầu xác minh thủ công; không tự vượt CAPTCHA" };
+    return { ok: false, reason: "CAPTCHA_REQUIRED", message: "Trang yêu cầu xác minh thủ công; không tự vượt CAPTCHA" };
   }
   const text = (value, limit = 2500) => String(value || "").replace(/\s+/g, " ").trim().slice(0, limit);
   const getMeta = (selectors) => { for (const selector of selectors) { const node = doc.querySelector(selector); if (node?.content) return text(node.content); } return ""; };
@@ -71,11 +71,13 @@ function isAllowedProductUrl(url) {
   } catch { return false; }
 }
 
-async function readProductFromWebContents(view, url, { minImages = 4, timeoutMs = 20_000, pause = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
+async function readProductFromWebContents(view, url, { minImages = 4, timeoutMs = 20_000, sessionReady = null, pause = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
   if (!isAllowedProductUrl(url)) throw new Error("UNSUPPORTED_DOMAIN: URL sản phẩm không hợp lệ");
   const contents = view?.webContents;
   if (!contents || typeof contents.executeJavaScript !== "function" || typeof contents.loadURL !== "function") throw new Error("WEBVIEW_UNAVAILABLE: cần WebContentsView đã có phiên đăng nhập sàn");
-  if (!contents.getURL || contents.getURL() !== url) {
+  const currentUrl = typeof contents.getURL === "function" ? String(contents.getURL() || "") : "";
+  if (sessionReady === false || !currentUrl || /^(about:blank|file:|chrome:)/i.test(currentUrl)) throw new Error("LOGIN_REQUIRED: không có trang sàn đang mở với phiên được người dùng đăng nhập");
+  if (currentUrl !== url) {
     try {
       await Promise.race([
         contents.loadURL(url),
@@ -90,7 +92,7 @@ async function readProductFromWebContents(view, url, { minImages = 4, timeoutMs 
     try { result = await contents.executeJavaScript(`(${extractProductSnapshot.toString()})(document, location.href)`, true); }
     catch(err) { throw new Error(`DOM_READ_FAILED: ${err.message}`); }
     last = result;
-    if (result.reason === "LOGIN_REQUIRED" || result.reason === "CAPTCHA" || result.reason === "UNSUPPORTED_DOMAIN") throw new Error(`${result.reason}: ${result.message}`);
+    if (result.reason === "LOGIN_REQUIRED" || result.reason === "CAPTCHA_REQUIRED" || result.reason === "CAPTCHA" || result.reason === "UNSUPPORTED_DOMAIN") throw new Error(`${result.reason === "CAPTCHA" ? "CAPTCHA_REQUIRED" : result.reason}: ${result.message}`);
     if (result.ok && result.images.length >= minImages && result.description) return result;
     await pause(500);
   }

@@ -50,7 +50,7 @@ test("Job enters queue only after every scene has passed Python Face Lock", asyn
   const queue = { inserted: 0, enqueue(job) { this.inserted++; return job; } };
   let pass = false;
   const pipeline = new RenderPipeline({ queue, provider: {}, tts: {}, cacheDir: f.dir, verifyProductIdentity: () => true,
-    faceLockGate: { verifyScene: async () => { if (!pass) throw new Error("Face Lock 70.00% < yêu cầu 95%"); return { passed: true }; } } });
+    faceLockGate: { verifyScene: async () => { if (!pass) throw new Error("Face Lock 70.00% < yêu cầu 95%"); return { passed: true, similarity_pct: 96.0 }; } } });
   await assert.rejects(pipeline.enqueue(payload, "k1"), /Face Lock 70\.00%/);
   assert.equal(queue.inserted, 0);
   pass = true;

@@ -37,7 +37,7 @@ test("Shopee DOM reader collects unique 6–8 product photos with description", 
 
 test("Login/captcha/domain restrictions give explicit errors", () => {
   assert.equal(extractProductSnapshot(docFor({login:true}),"https://shopee.vn/product").reason,"LOGIN_REQUIRED");
-  assert.equal(extractProductSnapshot(docFor({captcha:true}),"https://shopee.vn/product").reason,"CAPTCHA");
+  assert.equal(extractProductSnapshot(docFor({captcha:true}),"https://shopee.vn/product").reason,"CAPTCHA_REQUIRED");
   assert.equal(isAllowedProductUrl("https://shopee.vn.attacker.com/p"),false);
   assert.equal(isAllowedProductUrl("http://shopee.vn/p"),false);
 });

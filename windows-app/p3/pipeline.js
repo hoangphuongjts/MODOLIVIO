@@ -28,6 +28,16 @@ function validateJob(job, verifyFaceLock = () => false, verifyProductIdentity = 
   return true;
 }
 
+function assertVerifiedFaceLock(result, index) {
+  const pct = Number(result?.similarity_pct);
+  if (result?.passed !== true || !Number.isFinite(pct) || pct < 95 || pct > 100) {
+    const value = Number.isFinite(pct) ? pct.toFixed(2) + "%" : "không hợp lệ";
+    const why = String(result?.error || "Python verifier từ chối").replace(/\s+/g," ").slice(0,160);
+    throw new Error(`Cảnh ${index+1}: Face Lock ${value} < 95% hoặc verifier từ chối; lý do: ${why}`);
+  }
+  return pct/100;
+}
+
 class RenderPipeline {
   constructor({ queue, provider, tts, ffmpegPath = process.env.FFMPEG_PATH || "ffmpeg", cacheDir, exportsDir = cacheDir, onEvent = /** @type {(event: any) => void} */ (() => {}), verifyFaceLock = null, faceLockGate = null, verifyProductIdentity = null, assertProfileAllowed = /** @type {(profileId: string) => boolean} */ (() => true) }) {
     this.queue = queue; this.provider = provider; this.tts = tts; this.ffmpegPath = ffmpegPath;
@@ -41,7 +51,7 @@ class RenderPipeline {
     // Validate the complete job before queue insertion (no fake face attestation).
     this.validate(payload);
     if (this.faceLockGate) {
-      for (const [index, scene] of payload.scenes.entries()) await this.faceLockGate.verifyScene(scene, index);
+      for (const [index, scene] of payload.scenes.entries()) assertVerifiedFaceLock(await this.faceLockGate.verifyScene(scene, index), index);
     }
     return this.queue.enqueue({ id: randomUUID(), idempotencyKey, payload });
   }
@@ -71,6 +81,7 @@ class RenderPipeline {
           if (!taskId) {
             // Re-check files immediately before provider submission; they may have changed while queued.
             const faceLockResult = this.faceLockGate ? await this.faceLockGate.verifyScene(scene, index) : null;
+            if (this.faceLockGate) assertVerifiedFaceLock(faceLockResult, index);
             const submitted = await this.provider.submit({
               provider: scene.provider || payload.provider || "seedance",
               prompt: scene.prompt, imageUrl: scene.sourceImageUrl,
