@@ -78,7 +78,7 @@ function createServer({ dataDir, rendererDir, shopImporter = null }) {
           // Chat Annie product links use the exact signed-in Electron WebContentsView.
           if (action === "annieSendMessage" && shopImporter) {
             const message = String(parsed.args?.text || "");
-            const match = message.match(/https:\/\/[^\\s<>\\"\x27)]+/i);
+            const match = message.match(/https:\/\/[^\s<>"')]+/i);
             const shopLink = match?.[0];
             if (shopLink && shopPlatformForUrl(shopLink)) {
               const port = server.address()?.port;
