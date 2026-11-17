@@ -18,7 +18,7 @@ function resolveRenderProvider(kind = process.env.MODOLIVIO_RENDER_PROVIDER || "
   return assertProvider(new MuseProvider(options), "Muse");
 }
 
-function createRenderRouter({ enableMuse = false, defaultProvider = "seedance", seedanceProvider, museProvider, ...museOptions } = {}) {
+/** Explicit optional providers for checkJs on Windows; keep fail-closed behavior unchanged.\n * @param {{enableMuse?: boolean, defaultProvider?: string, seedanceProvider?: any, museProvider?: any, dataDir?: string, [key: string]: any}} [options]\n */\nfunction createRenderRouter({ enableMuse = false, defaultProvider = "seedance", seedanceProvider, museProvider, ...museOptions } = {}) {
   const seedance = assertProvider(seedanceProvider || new SeedanceProvider(), "Seedance");
   if (defaultProvider === "muse" && !enableMuse) throw new Error("Muse requested but MODOLIVIO_MUSE_ENGINE is not enabled");
   // Keep offline/CI tests independent of Playwright when Muse is disabled.
