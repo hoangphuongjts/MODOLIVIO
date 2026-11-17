@@ -11,6 +11,8 @@ const fs = require("fs");
 const path = require("path");
 const { Store } = require("./bridge.js");
 const { handleAction } = require("./handlers.js");
+const { shopPlatformForUrl } = require("./p3/product-dom-reader.js");
+const { recordShopAnnieImport } = require("./p3/shop-import.js");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -33,7 +35,7 @@ const MIME = {
   ".ttf": "font/ttf",
 };
 
-function createServer({ dataDir, rendererDir }) {
+function createServer({ dataDir, rendererDir, shopImporter = null }) {
   const store = new Store(dataDir);
 
   function sendJson(res, status, obj) {
@@ -73,6 +75,19 @@ function createServer({ dataDir, rendererDir }) {
         try { parsed = JSON.parse(body || "{}"); } catch { return sendJson(res, 400, { error: "Body không phải JSON hợp lệ" }); }
         const action = typeof parsed.action === "string" ? parsed.action : "";
         try {
+          // Chat Annie product links use the exact signed-in Electron WebContentsView.
+          if (action === "annieSendMessage" && shopImporter) {
+            const message = String(parsed.args?.text || "");
+            const match = message.match(/https:\/\/[^\\s<>\\"\x27)]+/i);
+            const shopLink = match?.[0];
+            if (shopLink && shopPlatformForUrl(shopLink)) {
+              const port = server.address()?.port;
+              const accepted = new Set([`http://127.0.0.1:${port}`, `http://localhost:${port}`]);
+              if (!accepted.has(req.headers.origin || "")) return sendJson(res, 403, { error: "SHOP_ORIGIN_DENIED" });
+              const product = await shopImporter(shopLink);
+              return sendJson(res, 200, { data: recordShopAnnieImport(store, message, product) });
+            }
+          }
           const data = await handleAction(store, action, parsed.args || {});
           sendJson(res, 200, { data });
         } catch (e) {

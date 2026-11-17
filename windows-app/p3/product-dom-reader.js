@@ -14,7 +14,7 @@ function extractProductSnapshot(doc = document, href = location.href) {
     return { ok: false, reason: "LOGIN_REQUIRED", message: "Phiên sàn cần đăng nhập lại trong app" };
   }
   if (/captcha|verify|challenge/.test(path) || has('iframe[src*="captcha"], [class*="captcha" i], [id*="captcha" i]') || /captcha|xác minh bạn là người/.test(pageText)) {
-    return { ok: false, reason: "CAPTCHA_REQUIRED", message: "Trang yêu cầu xác minh thủ công; không tự vượt CAPTCHA" };
+    return { ok: false, reason: "CAPTCHA", message: "Trang yêu cầu xác minh thủ công; không tự vượt CAPTCHA" };
   }
   const text = (value, limit = 2500) => String(value || "").replace(/\s+/g, " ").trim().slice(0, limit);
   const getMeta = (selectors) => { for (const selector of selectors) { const node = doc.querySelector(selector); if (node?.content) return text(node.content); } return ""; };
@@ -71,33 +71,73 @@ function isAllowedProductUrl(url) {
   } catch { return false; }
 }
 
-async function readProductFromWebContents(view, url, { minImages = 4, timeoutMs = 20_000, sessionReady = null, pause = ms => new Promise(r => setTimeout(r, ms)) } = {}) {
-  if (!isAllowedProductUrl(url)) throw new Error("UNSUPPORTED_DOMAIN: URL sản phẩm không hợp lệ");
-  const contents = view?.webContents;
-  if (!contents || typeof contents.executeJavaScript !== "function" || typeof contents.loadURL !== "function") throw new Error("WEBVIEW_UNAVAILABLE: cần WebContentsView đã có phiên đăng nhập sàn");
-  const currentUrl = typeof contents.getURL === "function" ? String(contents.getURL() || "") : "";
-  if (sessionReady === false || !currentUrl || /^(about:blank|file:|chrome:)/i.test(currentUrl)) throw new Error("LOGIN_REQUIRED: không có trang sàn đang mở với phiên được người dùng đăng nhập");
-  if (currentUrl !== url) {
-    try {
-      await Promise.race([
-        contents.loadURL(url),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("TIMEOUT: tải trang sản phẩm quá hạn")), timeoutMs))
-      ]);
-    } catch(err) { throw new Error(/^TIMEOUT/.test(err.message) ? err.message : `NAVIGATION_FAILED: ${err.message}`); }
-  }
-  const deadline = Date.now() + timeoutMs;
-  let last = null;
-  while (Date.now() < deadline) {
-    let result;
-    try { result = await contents.executeJavaScript(`(${extractProductSnapshot.toString()})(document, location.href)`, true); }
-    catch(err) { throw new Error(`DOM_READ_FAILED: ${err.message}`); }
-    last = result;
-    if (result.reason === "LOGIN_REQUIRED" || result.reason === "CAPTCHA_REQUIRED" || result.reason === "CAPTCHA" || result.reason === "UNSUPPORTED_DOMAIN") throw new Error(`${result.reason === "CAPTCHA" ? "CAPTCHA_REQUIRED" : result.reason}: ${result.message}`);
-    if (result.ok && result.images.length >= minImages && result.description) return result;
-    await pause(500);
-  }
-  if (!last?.ok) throw new Error(`TIMEOUT: ${last?.message || "Trang chưa tải xong"}`);
-  throw new Error(`INSUFFICIENT_PRODUCT_DATA: chỉ có ${last.images?.length || 0} ảnh / yêu cầu ${minImages}, mô tả ${last.description ? "có" : "thiếu"}`);
+// The extension extractor is the source of truth; injection runs inside the SAME
+// WebContentsView that owns the user's already signed-in partition.
+const { extractProductSnapshot: extractShopGrab } = require("../extension/shopee_grab.js");
+
+function shopPlatformForUrl(value) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password) return null;
+    if (["shopee.vn", "www.shopee.vn"].includes(url.hostname.toLowerCase())) return "shopee";
+    if (["tiktok.com", "www.tiktok.com", "shop.tiktok.com"].includes(url.hostname.toLowerCase())) return "tiktok";
+  } catch { /* invalid */ }
+  return null;
 }
 
-module.exports = { extractProductSnapshot, isAllowedProductUrl, readProductFromWebContents };
+async function readProductFromWebContents(view, url, {
+  minImages = 4, timeoutMs = 45_000, sessionReady = null, partialGraceMs = 4_000,
+  pause = ms => new Promise(resolve => setTimeout(resolve, ms))
+} = {}) {
+  const platform = shopPlatformForUrl(url);
+  if (!platform) throw new Error("UNSUPPORTED_DOMAIN: link HTTPS sàn không hợp lệ");
+  const contents = view?.webContents;
+  if (!contents || typeof contents.executeJavaScript !== "function" || typeof contents.loadURL !== "function")
+    throw new Error("LOGIN_REQUIRED: chưa mở WebContentsView phiên sàn trong ứng dụng");
+  const current = typeof contents.getURL === "function" ? String(contents.getURL() || "") : "";
+  if (sessionReady === false || !current || /^(about:blank|file:|chrome:)/i.test(current) ||
+      shopPlatformForUrl(current) !== platform)
+    throw new Error("LOGIN_REQUIRED: không có WebContentsView cùng sàn đã đăng nhập");
+  const deadline = Date.now() + Math.min(45_000, Math.max(1, timeoutMs));
+  const until = async (work, phase) => {
+    const wait = deadline - Date.now();
+    if (wait <= 0) throw new Error(`TIMEOUT: quá hạn 45 giây (${phase})`);
+    let timer;
+    try {
+      return await Promise.race([
+        Promise.resolve().then(work),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`TIMEOUT: quá hạn 45 giây (${phase})`)), wait); })
+      ]);
+    } finally { clearTimeout(timer); }
+  };
+  if (current !== url) {
+    try { await until(() => contents.loadURL(url), "navigation"); }
+    catch (error) { throw new Error(/^TIMEOUT/.test(error.message) ? error.message : `NAVIGATION_FAILED: ${error.message}`); }
+  }
+  const script = `(${extractShopGrab.toString()})(document, location.href)`;
+  let last;
+  let partialSince = null;
+  while (Date.now() < deadline) {
+    let result;
+    try { result = await until(() => contents.executeJavaScript(script, true), "DOM"); }
+    catch (error) { throw new Error(/^TIMEOUT/.test(error.message) ? error.message : `DOM_READ_FAILED: ${error.message}`); }
+    if (!result || typeof result !== "object") throw new Error("DOM_READ_FAILED: dữ liệu DOM không hợp lệ");
+    last = result;
+    const code = result.reason === "CAPTCHA" ? "CAPTCHA_REQUIRED" : result.reason;
+    if (["LOGIN_REQUIRED", "CAPTCHA_REQUIRED", "UNSUPPORTED_DOMAIN"].includes(code))
+      throw new Error(`${code}: ${result.message || "Trang sàn chưa sẵn sàng"}`);
+    if (result.ok && Array.isArray(result.images) && result.images.length >= minImages && result.description)
+      return { ...result, imageCount: result.images.length };
+    if (result.title && result.description && Array.isArray(result.images) && result.images.length < minImages) {
+      if (partialSince === null) partialSince = Date.now();
+      if (Date.now() - partialSince >= partialGraceMs)
+        throw new Error(`INSUFFICIENT_IMAGES: chỉ có ${result.images.length} ảnh / yêu cầu ${minImages}`);
+    } else partialSince = null;
+    await until(() => pause(Math.min(350, Math.max(1, deadline - Date.now()))), "DOM wait");
+  }
+  if (last?.title && last?.description && Array.isArray(last.images) && last.images.length < minImages)
+    throw new Error(`INSUFFICIENT_IMAGES: chỉ có ${last.images.length} ảnh / yêu cầu ${minImages}`);
+  throw new Error(`TIMEOUT: không đọc được sản phẩm trong 45 giây (${last?.message || "chưa sẵn sàng"})`);
+}
+
+module.exports = { extractProductSnapshot, isAllowedProductUrl, readProductFromWebContents, shopPlatformForUrl };

@@ -1,7 +1,7 @@
 // main.js — Tiến trình chính của MODOLIVIO Windows (Electron).
 "use strict";
 
-const { app, BrowserWindow, Menu, shell, dialog, ipcMain, Tray, nativeImage, session, safeStorage } = require("electron");
+const { app, BrowserWindow, Menu, shell, dialog, ipcMain, Tray, nativeImage, session, safeStorage, WebContentsView, clipboard } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const { execFile } = require("child_process");
@@ -11,6 +11,9 @@ const { createRenderRouter } = require("./p3/provider-selector.js");
 const { createFaceLockGate } = require("./p3/face-lock-gate.js");
 const { MuseSessionVault } = require("./p3/session-vault.js");
 const { SessionHealthMonitor, AutoReloginEngine } = require("./p3/session-health.js");
+const { ShopSessionController } = require("./p3/shop-session-controller.js");
+const { storeImportedShopProduct } = require("./p3/shop-import.js");
+const { shopPlatformForUrl } = require("./p3/product-dom-reader.js");
 
 const APP_VERSION = "1.3.0-win1";
 const VIENEU_URL = process.env.MODOLIVIO_VIENEU_URL || "http://127.0.0.1:8123";
@@ -34,6 +37,7 @@ const museWindows = new Map();
 const museHealth = new Map();
 const museSessionListeners = new WeakSet();
 let userAssistedRelogin = null;
+let shopSessionController = null;
 
 function dataDirFor() {
   return path.join(app.getPath("userData"), "MODOLIVIO");
@@ -41,7 +45,7 @@ function dataDirFor() {
 
 async function startLocalServer() {
   dataDir = dataDirFor();
-  const { server, store } = createServer({ dataDir, rendererDir: path.join(__dirname, "renderer") });
+  const { server, store } = createServer({ dataDir, rendererDir: path.join(__dirname, "renderer"), shopImporter: readAndStoreShopProduct });
   localServer = server;
   localStore = store;
   await new Promise((resolve, reject) => {
@@ -145,6 +149,42 @@ async function openMuseSignIn(profileId) {
   return true;
 }
 
+
+function requireShopController() {
+  if (!shopSessionController) throw new Error("LOGIN_REQUIRED: chưa khởi tạo phiên sàn trong MODOLIVIO");
+  return shopSessionController;
+}
+async function readAndStoreShopProduct(url) {
+  if (!localStore) throw new Error("SHOP_STORE_UNAVAILABLE");
+  const snapshot = await requireShopController().read(url);
+  return storeImportedShopProduct(localStore, snapshot);
+}
+async function readShopClipboard(platform) {
+  const url = clipboard.readText().trim();
+  if (!url || shopPlatformForUrl(url) !== platform) throw new Error("UNSUPPORTED_DOMAIN: clipboard phải chứa đúng một link sản phẩm HTTPS của sàn đã chọn");
+  const product = await readAndStoreShopProduct(url);
+  await dialog.showMessageBox(mainWindow || undefined, {
+    type:"info", title:"Đã nhập sản phẩm",
+    message:`Đã lưu “${product.title}” và ${product.imageCount} ảnh gốc`,
+    detail:"Đọc qua cùng WebContentsView đã đăng nhập; không xuất cookie hoặc phiên.",
+  });
+  return product;
+}
+function shopAction(action) {
+  return () => Promise.resolve().then(action).catch(error => dialog.showErrorBox("MODOLIVIO S4", String(error.message || error)));
+}
+function shopMenuEntries() {
+  return [
+    { label:"Mở phiên Shopee (đăng nhập thủ công)", click:shopAction(()=>requireShopController().open("shopee")) },
+    { label:"Xác nhận đã đăng nhập Shopee", click:shopAction(()=>requireShopController().confirm("shopee")) },
+    { label:"Đọc link Shopee từ clipboard → Kho sản phẩm", click:shopAction(()=>readShopClipboard("shopee")) },
+    { type:"separator" },
+    { label:"Mở phiên TikTok Shop (đăng nhập thủ công)", click:shopAction(()=>requireShopController().open("tiktok")) },
+    { label:"Xác nhận đã đăng nhập TikTok Shop", click:shopAction(()=>requireShopController().confirm("tiktok")) },
+    { label:"Đọc link TikTok Shop từ clipboard → Kho sản phẩm", click:shopAction(()=>readShopClipboard("tiktok")) },
+  ];
+}
+
 function buildMenu() {
   const template = [
     {
@@ -158,6 +198,8 @@ function buildMenu() {
           if (answer.response !== 0) return;
           try { await openMuseSignIn("default"); } catch (error) { dialog.showErrorBox("Không mở được Muse", error.message); }
         } },
+        { type: "separator" },
+        { label: "Phiên sàn Shopee / TikTok Shop", submenu: shopMenuEntries() },
         { type: "separator" },
         { label: "Thoát", role: "quit" },
       ],
@@ -476,6 +518,29 @@ function createWindow() {
 }
 
 
+
+function assertMainShopCaller(event) {
+  if (!mainWindow || event.sender !== mainWindow.webContents) throw new Error("SHOP_IPC_DENIED");
+}
+ipcMain.handle("modolivio:shop-open", (event, platform) => {
+  assertMainShopCaller(event);
+  return requireShopController().open(String(platform || ""));
+});
+ipcMain.handle("modolivio:shop-confirm", (event, platform) => {
+  assertMainShopCaller(event);
+  return requireShopController().confirm(String(platform || ""));
+});
+ipcMain.handle("modolivio:shop-status", event => {
+  assertMainShopCaller(event);
+  return requireShopController().status();
+});
+ipcMain.handle("modolivio:shop-read", async (event, url) => {
+  assertMainShopCaller(event);
+  const productUrl = String(url || "").trim();
+  if (!shopPlatformForUrl(productUrl)) throw new Error("UNSUPPORTED_DOMAIN: chỉ chấp nhận link HTTPS Shopee/TikTok");
+  return readAndStoreShopProduct(productUrl);
+});
+
 ipcMain.handle("modolivio:get-info", () => ({
   version: APP_VERSION,
   platform: process.platform,
@@ -545,6 +610,7 @@ app.whenReady().then(async () => {
     }
   }
   await startLocalServer();
+  shopSessionController = new ShopSessionController({ BrowserWindow, WebContentsView, session });
   await startBridgeAgent();
   buildMenu();
   createWindow();
@@ -560,6 +626,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", async (event) => {
+  try { shopSessionController?.close(); } catch { /* shutdown best effort */ }
   if (!bridgeAgent) { if (localServer) localServer.close(); return; }
   if (app.__p3Closing) return;
   event.preventDefault(); app.__p3Closing = true;

@@ -14,6 +14,10 @@ contextBridge.exposeInMainWorld("modolivio", {
   openMuseSignIn: (profileId) => ipcRenderer.invoke("modolivio:muse-open-sign-in", profileId),
   getMuseVaultStatus: () => ipcRenderer.invoke("modolivio:muse-session-vault-status"),
   confirmMuseSignIn: (profileId) => ipcRenderer.invoke("modolivio:muse-confirm-sign-in", profileId),
+  openShopSession: (platform) => ipcRenderer.invoke("modolivio:shop-open", platform),
+  confirmShopSession: (platform) => ipcRenderer.invoke("modolivio:shop-confirm", platform),
+  getShopSessionStatus: () => ipcRenderer.invoke("modolivio:shop-status"),
+  readShopProduct: (url) => ipcRenderer.invoke("modolivio:shop-read", url),
   onBridgeEvent: (callback) => {
     if (typeof callback !== "function") return () => {};
     const listener = (_event, payload) => callback(payload);
