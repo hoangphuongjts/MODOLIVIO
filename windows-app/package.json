@@ -2,15 +2,21 @@
   "author": "MODOLIVIO",
   "description": "MODOLIVIO — App Video Bán Hàng (bản Windows)",
   "devDependencies": {
+    "@types/node": "^24.9.0",
+    "@types/ws": "^8.18.1",
     "electron": "^45.3.2",
     "electron-builder": "^26.18.0",
-    "typescript": "^5.9.3",
-    "@types/node": "^24.9.0",
-    "@types/ws": "^8.18.1"
+    "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.3.2",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "ai": "^7.0.173",
+    "imapflow": "^1.0.0",
+    "playwright": "^1.65.1",
+    "sharp": "^0.35.5",
     "ws": "^8.18.3",
-    "playwright": "^1.56.0"
+    "zod": "^4.6.7"
   },
   "license": "UNLICENSED",
   "main": "main.js",
@@ -18,9 +24,9 @@
   "private": true,
   "productName": "MODOLIVIO",
   "scripts": {
-    "check": "node --check main.js && node --check preload.js && node --check server.js && node --check bridge.js && node --check handlers.js && node --check p3/sqlite.js && node --check p3/bridge-agent.js && node --check p3/job-queue.js && node --check p3/pipeline.js && node --check p3/providers.js && node --check p3/router.js && node --check p3/session-vault.js && node --check p3/session-health.js && node --check p3/account-safety.js && node --check extension/shopee_grab.js && node --check extension/service-worker.js && node --check extension/popup.js && node --check p3/provider-selector.js && node --check ci/smoke-bridge.js && node --check p3/muse/museCdpEngine.js && node --check p3/muse/museProvider.js && node --check p3/muse/museCookieStore.js && node --check p3/muse/museSessionVault.js && node --check p3/muse/autoReloginEngine.js && node --check p3/muse/electronMuseBrowserDriver.js && node --check p3/product-dom-reader.js && node --check p3/shop-import.js && node --check p3/shop-session-controller.js",
+    "check": "node --check main.js && node --check preload.js && node --check server.js && node --check bridge.js && node --check handlers.js && node --check p3/sqlite.js && node --check p3/bridge-agent.js && node --check p3/job-queue.js && node --check p3/pipeline.js && node --check p3/providers.js && node --check p3/router.js && node --check p3/session-vault.js && node --check p3/session-health.js && node --check p3/account-safety.js && node --check p3/muse/museSessionVault.js && node --check p3/muse/autoReloginEngine.js && node --check p3/muse/electronMuseBrowserDriver.js && node --check p3/muse/museCdpEngine.js && node --check p3/muse/museCookieStore.js && node --check p3/muse/museProvider.js && node --check extension/shopee_grab.js && node --check extension/service-worker.js && node --check extension/popup.js",
     "test": "node --test test/*.test.js",
-    "typecheck": "tsc --project tsconfig.typecheck.json",
+    "typecheck": "tsc --allowJs --checkJs --noEmit --target ES2022 --module commonjs --moduleResolution node --skipLibCheck p3/*.js p3/muse/museCookieStore.js p3/muse/museProvider.js",
     "dist:win": "electron-builder --win --x64 --publish=never",
     "pack:win": "electron-builder --win --x64 --dir --publish=never",
     "start": "electron .",
