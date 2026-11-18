@@ -1,10 +1,10 @@
-# re-run 2026-11-18 21:15: secrets MUSE_EMAIL/MUSE_PASSWORD added
 name: MODOLIVIO Muse S1 live DOM check
 
 # S1: đối chiếu DOM thật của muse.ai bằng nick hy sinh, trên GitHub Actions
 # Windows runner. Tự chạy khi push file S1 lên nhánh p3, hoặc chạy tay.
 # Không tạo video, không gửi tin nhắn — chỉ đăng nhập 1 lần, đọc DOM, báo cáo.
-# Chưa có secret MUSE_EMAIL/MUSE_PASSWORD thì dừng ở mã 2 (thiếu secret).
+# Chưa có secret MUSE_EMAIL/MUSE_PASSWORD/GMAIL_APP_PASSWORD thì dừng ở
+# mã 2 (thiếu secret).
 on:
   workflow_dispatch:
   push:
@@ -80,6 +80,7 @@ jobs:
         env:
           MUSE_EMAIL: ${{ secrets.MUSE_EMAIL }}
           MUSE_PASSWORD: ${{ secrets.MUSE_PASSWORD }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: node p3/muse/s1-dom-check.js
 
       - name: Upload S1 evidence
