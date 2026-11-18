@@ -190,13 +190,39 @@ async function main() {
         await saveState(page, 'state-2-login-page', report);
       }
 
-      // Điền email + mật khẩu (chỉ thử 1 lần).
-      const emailInput = page.locator('input[type="email"], input[name="email"], input#email, input[autocomplete="username"]').first();
-      const passInput = page.locator('input[type="password"]').first();
-      if ((await emailInput.count()) > 0 && (await passInput.count()) > 0) {
-        log('Điền email + mật khẩu và gửi (1 lần duy nhất)...');
+      // Đăng nhập Meta kiểu 2 bước (chỉ thử 1 lần): bước 1 nhập email + Continue,
+      // bước 2 mới hiện ô mật khẩu. (Bằng chứng run #3: trang đăng nhập chỉ có
+      // 1 ô "Mobile number or email", không có ô mật khẩu cùng trang.)
+      const emailInput = page.locator('input[placeholder="Mobile number or email"], input[aria-label="Mobile number or email"], input[type="email"], input[name="email"], input#email, input[autocomplete="username"]').first();
+      let passInput = page.locator('input[type="password"]').first();
+      const formFound = (await emailInput.count()) > 0;
+      if (formFound && (await passInput.count()) === 0) {
+        log('Trang đăng nhập 2 bước: điền email rồi bấm Continue...');
         await emailInput.fill(email, { timeout: 15000 });
         await sleep(800);
+        const contBtn = page.locator('button[data-pel-click="login_contact_continue_click"], button[type="submit"]').first();
+        if ((await contBtn.count()) > 0) {
+          await contBtn.click({ timeout: 10000 });
+        } else {
+          await emailInput.press('Enter');
+        }
+        await sleep(5000);
+        passInput = page.locator('input[type="password"]').first();
+        await saveState(page, 'state-2b-password-page', report);
+        if ((await passInput.count()) === 0) {
+          const challenge = await detectChallenge(page);
+          if (challenge.challenged) {
+            report.challenge = challenge;
+            report.loginOutcome = 'CHALLENGED';
+            report.notes.push('Sau khi nhập email + Continue thì gặp trang xác minh/thử thách — đã DỪNG, không nhập mã. Xem ảnh/DOM state-2b.');
+          } else {
+            report.loginOutcome = 'LOGIN_FAILED';
+            report.notes.push('Đã nhập email + Continue nhưng không thấy ô mật khẩu xuất hiện — xem ảnh/DOM state-2b để biết trang đang ở đâu.');
+          }
+        }
+      }
+      if (formFound && (await passInput.count()) > 0) {
+        log('Điền mật khẩu và gửi (1 lần duy nhất)...');
         await passInput.fill(password, { timeout: 15000 });
         await sleep(800);
         const submit = page.locator('button[type="submit"], button:has-text("Log In"), button:has-text("Log in")').first();
@@ -232,7 +258,7 @@ async function main() {
           report.loginOutcome = 'LOGIN_FAILED';
           report.notes.push('Sau 120s vẫn không thấy ô nhập chat và không thấy trang xác minh rõ ràng — xem ảnh/DOM state-3 để biết trang đang ở đâu.');
         }
-      } else {
+      } else if (!formFound) {
         report.loginOutcome = 'LOGIN_FORM_NOT_FOUND';
         report.notes.push('Không tìm thấy ô email/mật khẩu trên trang đăng nhập — xem ảnh/DOM state-2. Có thể giao diện đăng nhập của Meta khác với dự đoán.');
       }
