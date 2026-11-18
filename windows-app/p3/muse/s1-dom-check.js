@@ -207,6 +207,16 @@ async function main() {
           await emailInput.press('Enter');
         }
         await sleep(5000);
+        // Meta có thể đưa tới trang nhập mã 6 số thay vì ô mật khẩu — trang đó
+        // có link "Use password instead": bấm vào đó để về luồng mật khẩu.
+        // (Bằng chứng run #4: sau Continue, Meta gửi mã về email thay vì
+        // hiện ô mật khẩu.)
+        const usePassLink = page.locator('a, button', { hasText: 'Use password instead' }).first();
+        if ((await usePassLink.count()) > 0) {
+          log('Trang yêu cầu mã — bấm "Use password instead" để dùng mật khẩu...');
+          await usePassLink.click({ timeout: 10000 });
+          await sleep(5000);
+        }
         passInput = page.locator('input[type="password"]').first();
         await saveState(page, 'state-2b-password-page', report);
         if ((await passInput.count()) === 0) {
