@@ -1,0 +1,88 @@
+name: MODOLIVIO Muse S1 live DOM check
+
+# S1: đối chiếu DOM thật của muse.ai bằng nick hy sinh, trên GitHub Actions
+# Windows runner. Tự chạy khi push file S1 lên nhánh p3, hoặc chạy tay.
+# Không tạo video, không gửi tin nhắn — chỉ đăng nhập 1 lần, đọc DOM, báo cáo.
+# Chưa có secret MUSE_EMAIL/MUSE_PASSWORD thì dừng ở mã 2 (thiếu secret).
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/p3-windows-bridge-agent
+    paths:
+      - '.github/workflows/muse-s1.yml'
+      - 'windows-app/p3/muse/s1-dom-check.js'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: modolivio-muse-s1-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  muse-s1:
+    name: Muse S1 DOM check (live muse.ai)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: windows-app
+    env:
+      CI: 'true'
+      MODOLIVIO_MUSE_LIVE: '1'
+
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+
+      - name: Install Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: windows-app/package-lock.json
+
+      - name: Verify Windows Chrome installation
+        id: chrome
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $paths = @(
+            "${env:ProgramFiles}\Google\Chrome\Application\chrome.exe",
+            "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+            "${env:LOCALAPPDATA}\Google\Chrome\Application\chrome.exe"
+          )
+          $chrome = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $chrome) {
+            choco install googlechrome --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to install Google Chrome' }
+            $chrome = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $chrome) { throw 'Chrome missing after installation' }
+          "CHROME_BIN=$chrome" >> $env:GITHUB_ENV
+          & $chrome --version
+
+      - name: Install NPM dependencies
+        shell: pwsh
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Playwright Chromium (fallback if no system Chrome)
+        shell: pwsh
+        continue-on-error: true
+        run: npx playwright install chromium
+
+      - name: Run S1 DOM check (nick hy sinh, 1 lần đăng nhập)
+        shell: pwsh
+        env:
+          MUSE_EMAIL: ${{ secrets.MUSE_EMAIL }}
+          MUSE_PASSWORD: ${{ secrets.MUSE_PASSWORD }}
+        run: node p3/muse/s1-dom-check.js
+
+      - name: Upload S1 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: muse-s1-evidence
+          path: windows-app/s1-output/
+          retention-days: 30
