@@ -10,7 +10,9 @@
  *
  * Cách chạy (workflow .github/workflows/muse-s1.yml):
  *   node p3/muse/s1-dom-check.js
- *   Env bắt buộc (GitHub Secrets): MUSE_EMAIL, MUSE_PASSWORD
+ *   Env bắt buộc (GitHub Secrets): MUSE_EMAIL, MUSE_PASSWORD,
+ *   GMAIL_APP_PASSWORD (mật khẩu ứng dụng Gmail của hộp thư hy sinh —
+ *   để script tự đọc mã đăng nhập Meta gửi về email; xem fetchMetaCode).
  *   (tài khoản Muse hy sinh — KHÔNG dùng nick chính).
  *
  * Kết quả: thư mục windows-app/s1-output/
@@ -20,9 +22,11 @@
  *
  * Mã thoát: 0 = S1 PASS (đã đăng nhập + thấy ô nhập chat);
  *            1 = S1 FAIL (không đăng nhập được / bị chặn / thiếu selector);
- *            2 = thiếu secret MUSE_EMAIL/MUSE_PASSWORD.
- * Không bao giờ in email/mật khẩu ra log. Chỉ thử đăng nhập 1 lần,
- * gặp trang xác minh thì DỪNG và báo CHALLENGED, không nhập mã.
+ *            2 = thiếu secret MUSE_EMAIL/MUSE_PASSWORD/GMAIL_APP_PASSWORD.
+ * Không bao giờ in email/mật khẩu/mã xác minh ra log. Chỉ thử đăng nhập
+ * 1 lần. Khi Meta đòi mã dùng một lần, script tự đọc mã từ hộp thư hy
+ * sinh qua IMAP (chỉ thư mới nhất, không xóa/không sửa thư) rồi điền mã
+ * 1 lần duy nhất; nếu không lấy được mã thì DỪNG và báo CHALLENGED.
  */
 
 const fs = require('fs');
@@ -51,6 +55,11 @@ const CHALLENGE_PATTERNS = [
   /2[- ]step verification/i,
   /xác minh/i,
   /mã xác minh/i,
+  /mã dùng một lần/i,
+  /code_submit/i,
+  /Kiểm tra email của bạn/i,
+  /Hãy nhập mã/i,
+  /Enter your code/i,
   /suspicious/i,
   /unusual (activity|login)/i,
   /confirm (your )?identity/i,
@@ -107,6 +116,10 @@ async function checkSelectors(page) {
 
 async function detectChallenge(page) {
   try {
+    const url = page.url();
+    // Trang code_submit của Meta: chỉ ghi lại phần path, KHÔNG ghi query
+    // (trong query có token dùng một lần, không được đưa vào báo cáo).
+    if (/code_submit/i.test(url)) return { challenged: true, pattern: 'code_submit url', excerpt: url.split('?')[0].slice(0, 200) };
     const bodyText = (await page.evaluate(() => document.body ? document.body.innerText : '')).slice(0, 4000);
     const hit = CHALLENGE_PATTERNS.find((re) => re.test(bodyText));
     if (hit) return { challenged: true, pattern: String(hit), excerpt: bodyText.slice(0, 300) };
@@ -116,6 +129,91 @@ async function detectChallenge(page) {
     log(`Lỗi khi kiểm tra trang xác minh: ${e.message}`);
   }
   return { challenged: false };
+}
+
+// Đọc mã đăng nhập 6 số Meta gửi về hộp thư hy sinh qua IMAP, dùng mật khẩu
+// ứng dụng Gmail (secret GMAIL_APP_PASSWORD). Chỉ đọc thư trong ~15 phút
+// qua, không xóa/không đánh dấu đã đọc, không in mã hay nội dung thư ra log.
+// Trả về mã (chuỗi 6 số) hoặc null nếu không lấy được trong 5 phút.
+async function fetchMetaCode({ user, appPassword }) {
+  let ImapFlow;
+  try {
+    ({ ImapFlow } = require('imapflow'));
+  } catch (e) {
+    log('Thiếu thư viện imapflow — không đọc được hộp thư.');
+    return null;
+  }
+  const deadline = Date.now() + 5 * 60 * 1000;
+  let client = null;
+  try {
+    client = new ImapFlow({
+      host: 'imap.gmail.com',
+      port: 993,
+      secure: true,
+      auth: { user, pass: appPassword },
+      logger: false,
+    });
+    await client.connect();
+    await client.mailboxOpen('INBOX');
+    while (Date.now() < deadline) {
+      let uids = [];
+      try {
+        uids = await client.search({ since: new Date(Date.now() - 15 * 60 * 1000) });
+      } catch (e) {
+        log(`Tìm thư mã thất bại: ${e.message}`);
+      }
+      uids.sort((a, b) => b - a);
+      for (const uid of uids.slice(0, 5)) {
+        try {
+          const msg = await client.fetchOne(uid, { envelope: true, source: true });
+          const subject = (msg && msg.envelope && msg.envelope.subject) || '';
+          const raw = msg && msg.source ? msg.source.toString('utf8') : '';
+          const idx = raw.search(/\r\n\r\n|\n\n/);
+          const body = idx >= 0 ? raw.slice(idx) : raw;
+          const text = `${subject}\n${body}`;
+          if (!/meta|facebook/i.test(`${subject}\n${raw.slice(0, 2000)}`)) continue;
+          const m = text.match(/\b(\d{6})\b/);
+          if (m) {
+            log('Đã lấy được mã từ email (không in mã ra log).');
+            return m[1];
+          }
+        } catch (e) {
+          /* thử thư tiếp theo */
+        }
+      }
+      await sleep(30000);
+    }
+    log('Hết 5 phút chờ mà không thấy email mã của Meta.');
+  } catch (e) {
+    log(`Không đọc được hộp thư: ${e.message}`);
+  } finally {
+    if (client) {
+      try { await client.logout(); } catch (_) { /* bỏ qua */ }
+    }
+  }
+  return null;
+}
+
+// Điền mã 6 số vào trang xác minh của Meta rồi gửi. Trả về true nếu đã
+// điền + gửi được, false nếu không thấy ô mã.
+async function fillCodeAndSubmit(page, code) {
+  try {
+    const codeInput = page.locator('input[placeholder="Mã"], input[inputmode="numeric"], input[autocomplete="one-time-code"], input[type="text"]').first();
+    if ((await codeInput.count()) === 0) return false;
+    await codeInput.fill(code, { timeout: 15000 });
+    await sleep(800);
+    const next = page.locator('button:has-text("Tiếp tục"), [role="button"]:has-text("Tiếp tục")').first();
+    if ((await next.count()) > 0) {
+      await next.click({ timeout: 10000 });
+    } else {
+      await codeInput.press('Enter');
+    }
+    await sleep(5000);
+    return true;
+  } catch (e) {
+    log(`Điền mã thất bại: ${e.message}`);
+    return false;
+  }
 }
 
 async function main() {
@@ -132,13 +230,18 @@ async function main() {
 
   const email = process.env.MUSE_EMAIL || '';
   const password = process.env.MUSE_PASSWORD || '';
-  if (!email || !password) {
+  // Mật khẩu ứng dụng Gmail thường hiển thị dạng "xxxx xxxx xxxx xxxx" —
+  // bỏ khoảng trắng để dùng cho IMAP.
+  const gmailAppPassword = (process.env.GMAIL_APP_PASSWORD || '').replace(/\s+/g, '');
+  if (!email || !password || !gmailAppPassword) {
     report.loginOutcome = 'MISSING_SECRETS';
-    report.notes.push('Thiếu secret MUSE_EMAIL hoặc MUSE_PASSWORD. Thêm trong repo Settings → Secrets and variables → Actions, rồi chạy lại workflow.');
+    report.notes.push('Thiếu secret MUSE_EMAIL, MUSE_PASSWORD hoặc GMAIL_APP_PASSWORD. Thêm trong repo Settings → Secrets and variables → Actions, rồi chạy lại workflow.');
     fs.writeFileSync(path.join(OUT_DIR, 's1-report.json'), JSON.stringify(report, null, 2), 'utf8');
-    log('S1 FAIL: thiếu secret MUSE_EMAIL/MUSE_PASSWORD.');
+    log('S1 FAIL: thiếu secret MUSE_EMAIL/MUSE_PASSWORD/GMAIL_APP_PASSWORD.');
     process.exit(2);
   }
+  // Chỉ thử lấy + điền mã 1 lần duy nhất trong cả lượt chạy.
+  let codeTried = false;
 
   const chromeBin = process.env.CHROME_BIN || '';
   let browser;
@@ -221,13 +324,37 @@ async function main() {
         await saveState(page, 'state-2b-password-page', report);
         if ((await passInput.count()) === 0) {
           const challenge = await detectChallenge(page);
-          if (challenge.challenged) {
+          if (challenge.challenged && /code/i.test(challenge.pattern) && !codeTried) {
+            // Trang đòi mã ngay sau Continue (chưa tới bước mật khẩu) — thử
+            // lấy mã từ Gmail 1 lần duy nhất rồi điền mã (hướng C).
+            codeTried = true;
             report.challenge = challenge;
-            report.loginOutcome = 'CHALLENGED';
-            report.notes.push('Sau khi nhập email + Continue thì gặp trang xác minh/thử thách — đã DỪNG, không nhập mã. Xem ảnh/DOM state-2b.');
-          } else {
-            report.loginOutcome = 'LOGIN_FAILED';
-            report.notes.push('Đã nhập email + Continue nhưng không thấy ô mật khẩu xuất hiện — xem ảnh/DOM state-2b để biết trang đang ở đâu.');
+            log('Trang đòi mã — thử lấy mã từ Gmail (1 lần duy nhất)...');
+            const code = await fetchMetaCode({ user: email, appPassword: gmailAppPassword });
+            if (code && (await fillCodeAndSubmit(page, code))) {
+              log('Đã điền mã và gửi — chờ xem trang tiếp theo...');
+              await sleep(5000);
+              passInput = page.locator('input[type="password"]').first();
+              report.challenge = null;
+              const s2 = await checkSelectors(page);
+              if (s2.composer.found && !s2.notLoggedInPane.found) {
+                report.loginOutcome = 'LOGGED_IN';
+                selectors = s2;
+              }
+            }
+          }
+          if (report.loginOutcome !== 'LOGGED_IN' && (await passInput.count()) === 0) {
+            const ch2 = await detectChallenge(page);
+            if (ch2.challenged) {
+              report.challenge = ch2;
+              report.loginOutcome = 'CHALLENGED';
+              report.notes.push(codeTried
+                ? 'Đã thử điền mã từ Gmail nhưng vẫn chưa qua được trang xác minh — xem ảnh/DOM state-2b.'
+                : 'Sau khi nhập email + Continue thì gặp trang xác minh/thử thách — đã DỪNG, không nhập mã. Xem ảnh/DOM state-2b.');
+            } else {
+              report.loginOutcome = 'LOGIN_FAILED';
+              report.notes.push('Đã nhập email + Continue nhưng không thấy ô mật khẩu xuất hiện — xem ảnh/DOM state-2b để biết trang đang ở đâu.');
+            }
           }
         }
       }
@@ -242,7 +369,9 @@ async function main() {
           await passInput.press('Enter');
         }
         // Chờ tối đa 120s: hoặc vào được chat, hoặc bị chặn/xác minh.
-        const deadline = Date.now() + 120000;
+        // Nếu Meta đòi mã dùng một lần thì thử lấy mã từ Gmail 1 lần duy
+        // nhất rồi điền mã (hướng C, anh đã chọn), sau đó chờ thêm 180s.
+        let deadline = Date.now() + 120000;
         let settled = false;
         while (Date.now() < deadline) {
           await sleep(5000);
@@ -254,6 +383,21 @@ async function main() {
           const challenge = await detectChallenge(page);
           if (challenge.challenged) {
             report.challenge = challenge;
+            if (!codeTried && /code/i.test(challenge.pattern)) {
+              codeTried = true;
+              log('Trang đòi mã — thử lấy mã từ Gmail (1 lần duy nhất)...');
+              const code = await fetchMetaCode({ user: email, appPassword: gmailAppPassword });
+              if (code) {
+                const filled = await fillCodeAndSubmit(page, code);
+                if (filled) {
+                  log('Đã điền mã và gửi — chờ vào chat...');
+                  report.challenge = null;
+                  deadline = Date.now() + 180000;
+                  continue;
+                }
+              }
+              report.notes.push('Đã thử lấy mã từ Gmail nhưng không lấy/điền được — xem ảnh/DOM state-3.');
+            }
             settled = true;
             break;
           }
@@ -261,7 +405,9 @@ async function main() {
         await saveState(page, 'state-3-after-login', report);
         if (report.challenge) {
           report.loginOutcome = 'CHALLENGED';
-          report.notes.push('Gặp trang xác minh/thử thách sau khi gửi đăng nhập — đã DỪNG, không nhập mã. Xem ảnh/DOM state-3.');
+          report.notes.push(codeTried
+            ? 'Đã thử điền mã từ Gmail nhưng vẫn chưa vào được chat — xem ảnh/DOM state-3.'
+            : 'Gặp trang xác minh/thử thách sau khi gửi đăng nhập — đã DỪNG, không nhập mã. Xem ảnh/DOM state-3.');
         } else if (selectors.composer.found && !selectors.notLoggedInPane.found) {
           report.loginOutcome = 'LOGGED_IN';
         } else {
