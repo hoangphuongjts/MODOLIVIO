@@ -63,9 +63,11 @@ jobs:
           "CHROME_BIN=$chrome" >> $env:GITHUB_ENV
           & $chrome --version
 
+      # Dùng npm install như windows-test.yml (không dùng npm ci) vì
+      # package-lock.json trên nhánh này đang lỗi thời so với package.json.
       - name: Install NPM dependencies
         shell: pwsh
-        run: npm ci --no-audit --no-fund
+        run: npm install --no-audit --no-fund
 
       - name: Install Playwright Chromium (fallback if no system Chrome)
         shell: pwsh
