@@ -1,3 +1,4 @@
+# re-run 2026-11-18 21:15: secrets MUSE_EMAIL/MUSE_PASSWORD added
 name: MODOLIVIO Muse S1 live DOM check
 
 # S1: đối chiếu DOM thật của muse.ai bằng nick hy sinh, trên GitHub Actions
